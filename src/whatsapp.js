@@ -23,6 +23,22 @@ export function isWhatsAppConnected() {
   return connected;
 }
 
+function getAuthDir() {
+  const baseDir = process.env.PERSIST_DIR
+    ? path.resolve(process.env.PERSIST_DIR)
+    : path.resolve('.');
+  return path.join(baseDir, 'wa_auth');
+}
+
+function clearAuthFiles() {
+  const authDir = getAuthDir();
+  try {
+    fs.rmSync(authDir, { recursive: true, force: true });
+  } catch (err) {
+    console.error('Erro ao limpar sessão antiga do WhatsApp:', err?.message || err);
+  }
+}
+
 function clearPairing(error = null, code = null) {
   if (pairingTimeout) {
     clearTimeout(pairingTimeout);
@@ -39,11 +55,7 @@ function clearPairing(error = null, code = null) {
 }
 
 async function createSocket() {
-  const baseDir = process.env.PERSIST_DIR
-    ? path.resolve(process.env.PERSIST_DIR)
-    : path.resolve('.');
-
-  const authDir = path.join(baseDir, 'wa_auth');
+  const authDir = getAuthDir();
   fs.mkdirSync(authDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -55,7 +67,7 @@ async function createSocket() {
     version,
     auth: state,
     logger,
-    browser: Browsers.macOS('Desktop'),
+    browser: Browsers.macOS('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: false
   });
@@ -139,6 +151,10 @@ async function startFreshSocketForPairing() {
 
   sock = null;
   connected = false;
+  authRegistered = false;
+
+  // Remove chaves incompletas deixadas por tentativas anteriores de pareamento.
+  clearAuthFiles();
 
   try {
     oldSock?.ws?.close();
