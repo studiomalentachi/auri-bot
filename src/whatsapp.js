@@ -5,7 +5,8 @@ import pino from 'pino';
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  Browsers
 } from '@whiskeysockets/baileys';
 
 const logger = pino({ level: 'silent' });
@@ -31,7 +32,7 @@ export async function startWhatsApp() {
     version,
     auth: state,
     logger,
-    browser: ['Auri', 'Chrome', '1.0.0'],
+    browser: Browsers.macOS('Chrome'),,
     markOnlineOnConnect: false,
     syncFullHistory: false
   });
