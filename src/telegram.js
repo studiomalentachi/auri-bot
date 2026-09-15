@@ -91,7 +91,7 @@ async function showGroups(ctx) {
     lastGroups = await listWhatsAppGroups();
     if (!lastGroups.length) return ctx.reply('Não encontrei grupos nesta conta.', mainMenu());
 
-    const buttons = lastGroups.slice(0, 30).map((g, i) => [
+    const buttons = lastGroups.map((g, i) => [
       Markup.button.callback(`${g.name} (${g.size})`, `group:${i}`)
     ]);
     await ctx.reply('👥 Toque no grupo que receberá as ofertas:', Markup.inlineKeyboard(buttons));
