@@ -12,7 +12,7 @@ export async function getMeliProduct(itemId) {
   if (!res.ok) throw new Error(json?.message || `Mercado Livre HTTP ${res.status}`);
   return {
     platform: 'mercadolivre', itemId: json.id, name: json.title || '',
-    imageUrl: json.thumbnail?.replace('http://', 'https://') || null,
+    imageUrl: json.pictures?.[0]?.secure_url || json.secure_thumbnail || json.thumbnail?.replace('http://', 'https://') || null,
     price: Number(json.price || json.base_price || 0),
     canonicalUrl: json.permalink || '', affiliateLink: null,
     sales: Number(json.sold_quantity || 0), rating: 0, discountPct: 0, score: 50

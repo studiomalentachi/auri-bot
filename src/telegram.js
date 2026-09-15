@@ -239,6 +239,14 @@ async function beginLink(ctx) {
 }
 
 async function previewOffer(ctx, d) {
+  const product = d.data.product || {};
+
+  if (product.imageUrl) {
+    try {
+      await ctx.replyWithPhoto(product.imageUrl);
+    } catch {}
+  }
+
   const preview =
     `🛍️ PRÉVIA\n\n` +
     `${d.data.text}\n\n` +

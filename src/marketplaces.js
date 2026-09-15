@@ -7,7 +7,7 @@ export function detectMarketplace(url) {
   if (s.includes('shopee.')) return 'shopee';
   if (s.includes('shein.')) return 'shein';
   if (s.includes('amazon.')) return 'amazon';
-  if (s.includes('mercadolivre.') || s.includes('mercadolibre.')) return 'mercadolivre';
+  if (s.includes('mercadolivre.') || s.includes('mercadolibre.') || s.includes('meli.la')) return 'mercadolivre';
   return 'generic';
 }
 
@@ -24,7 +24,7 @@ async function resolveRedirect(url) {
 export async function importProductFromUrl(inputUrl) {
   const marketplace = detectMarketplace(inputUrl);
   let url = inputUrl;
-  if (marketplace === 'shopee') url = await resolveRedirect(inputUrl);
+  if (marketplace === 'shopee' || marketplace === 'mercadolivre') url = await resolveRedirect(inputUrl);
 
   if (marketplace === 'shopee') {
     const ids = parseShopeeIds(url);
@@ -43,16 +43,17 @@ export async function importProductFromUrl(inputUrl) {
   }
 
   if (marketplace === 'mercadolivre') {
-    const id = parseMeliItemId(inputUrl);
+    const id = parseMeliItemId(url);
     if (id) {
       const product = await getMeliProduct(id).catch(() => null);
       if (product) {
         // O Mercado Livre não oferece link de afiliado público via API oficial; preserve o link que a usuária colou.
         product.affiliateLink = inputUrl;
+        product.canonicalUrl = product.canonicalUrl || url;
         return product;
       }
     }
-    return { platform: 'mercadolivre', name: 'Produto Mercado Livre', canonicalUrl: inputUrl, affiliateLink: inputUrl, imageUrl: null, price: 0, rating: 0, sales: 0, score: 0 };
+    return { platform: 'mercadolivre', name: 'Produto Mercado Livre', canonicalUrl: url, affiliateLink: inputUrl, imageUrl: null, price: 0, rating: 0, sales: 0, score: 0 };
   }
 
   if (marketplace === 'shein') {
