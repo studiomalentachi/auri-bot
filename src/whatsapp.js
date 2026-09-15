@@ -227,8 +227,7 @@ export async function sendOfferToGroup(groupJid, item) {
   const text = item.text?.trim() || '';
 const link = item.link?.trim() || '';
 
-const text = item.text?.trim() || '';
-const link = item.link?.trim() || '';
+
 
 const caption = link
   ? `${text}\n\n🛍️ Compre aqui: ${link}`
