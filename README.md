@@ -1,68 +1,52 @@
-# Auri — Automação de ofertas
+# Auri v4 — Universo da Esther
 
-Auri é um bot privado do Telegram para cadastrar ofertas e enviá-las automaticamente para um grupo de WhatsApp.
+Bot privado no Telegram para organizar ofertas, gerar textos, buscar oportunidades e enviar automaticamente para grupos do WhatsApp.
 
-## Como fica no dia a dia
+## O que funciona sem nenhuma chave nova
+- Telegram + WhatsApp
+- fila
+- envio automático 08h–22h
+- múltiplos grupos
+- atraso aleatório entre grupos
+- cadastro manual
+- oferta por link (mantém o link informado)
+- anti-duplicação
+- pausar/retomar/enviar agora
 
-Depois da configuração inicial, você usa apenas o Telegram:
+## O que ativa ao adicionar credenciais
+### Shopee Affiliate Open API
+Variáveis:
+- SHOPEE_AFFILIATE_APP_ID
+- SHOPEE_AFFILIATE_SECRET
 
-1. toque em **➕ Nova oferta**;
-2. envie a foto;
-3. envie o texto;
-4. envie o link de afiliada;
-5. toque em **✅ Salvar e colocar na fila**.
+Ativa:
+- busca de produtos
+- dados reais: imagem, preço, vendas, avaliação, comissão
+- geração automática de link de afiliada
+- busca automática por nichos
+- atualização de preço antes do envio
+- resultados/comissões dos últimos 7 dias
 
-Pronto. Você pode fechar o Telegram. Auri envia sozinha a próxima oferta da fila para o grupo escolhido.
+### IA
+Adicione ao menos uma:
+- OPENAI_API_KEY
+- GEMINI_API_KEY
+- ANTHROPIC_API_KEY
 
-## Programação configurada
+Sem chave de IA, a Auri usa um texto local simples e não inventa dados.
 
-- 1 oferta por vez;
-- a cada 10 minutos;
-- de 08:00 até 22:00;
-- fuso `America/Sao_Paulo`;
-- fila persistente quando `PERSIST_DIR` aponta para um volume permanente.
+### Amazon
+- AMAZON_ACCESS_KEY
+- AMAZON_SECRET_KEY
+- AMAZON_PARTNER_TAG
 
-Se a fila estiver vazia, não envia nada. Se estiver pausada, aguarda você retomar.
+### Mercado Livre
+- MELI_ACCESS_TOKEN (para dados via API). O link de afiliado deve ser gerado pelo Portal/Barra de Afiliados oficial e colado na Auri.
 
-## Painel no Telegram
+### SHEIN
+A SHEIN exige que os produtos compartilhados para comissão sejam selecionados/gerados no Centro de Afiliados. A Auri aceita esse link oficial e cuida do restante, mas não transforma um link comum da SHEIN em link com comissão sem uma API oficial da conta.
 
-- ➕ Nova oferta
-- 📦 Fila
-- 📱 WhatsApp
-- 👥 Escolher grupo
-- 📊 Status
-- ▶️ Enviar agora
-- ⏸️ Pausar envios / ▶️ Retomar envios
+## Railway
+Mantenha o Volume montado em `/data` e `PERSIST_DIR=/data`.
 
-## Configuração inicial
-
-O bot precisa ficar rodando em um servidor Node.js. Telegram não hospeda o código do bot.
-
-Variáveis necessárias:
-
-```env
-TELEGRAM_BOT_TOKEN=SEU_TOKEN_DO_BOTFATHER
-TELEGRAM_ADMIN_ID=SEU_ID_NUMERICO_DO_TELEGRAM
-TZ=America/Sao_Paulo
-INCLUDE_22=true
-PERSIST_DIR=/data
-```
-
-Depois de iniciar o serviço:
-
-1. abra a Auri e envie `/start`;
-2. toque em **📱 WhatsApp**;
-3. envie seu número com DDI + DDD + número, apenas dígitos;
-4. use o código de pareamento exibido pela Auri no menu de aparelhos conectados do WhatsApp;
-5. toque em **👥 Escolher grupo** e selecione o grupo;
-6. confirme em **📊 Status** que WhatsApp, grupo e automação estão corretos.
-
-A partir daí, basta salvar ofertas na Auri.
-
-## Segurança
-
-Auri aceita comandos somente do `TELEGRAM_ADMIN_ID` configurado. Não publique o token do BotFather no GitHub ou em mensagens.
-
-## WhatsApp
-
-A conexão usa Baileys/WhatsApp Web e não é a API oficial da Meta. A sessão pode precisar ser reconectada em alguns casos e o uso deve respeitar as regras do WhatsApp e as expectativas dos participantes do grupo.
+Suba os arquivos no mesmo repositório. O volume preserva sessão do WhatsApp, fila e histórico.
