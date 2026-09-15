@@ -32,7 +32,7 @@ export async function startWhatsApp() {
     version,
     auth: state,
     logger,
-    browser: Browsers.macOS('Chrome'),,
+    browser: Browsers.macOS('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: false
   });
