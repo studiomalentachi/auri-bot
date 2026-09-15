@@ -1,0 +1,18 @@
+{
+  "name": "auri-automacao",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/store.js && node --check src/whatsapp.js && node --check src/telegram.js && node --check src/scheduler.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "dotenv": "latest",
+    "node-cron": "latest",
+    "pino": "latest",
+    "qrcode-terminal": "latest",
+    "telegraf": "latest"
+  }
+}
