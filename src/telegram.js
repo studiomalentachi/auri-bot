@@ -241,7 +241,11 @@ async function beginLink(ctx) {
 async function previewOffer(ctx, d) {
   const product = d.data.product || {};
 
-  if (product.imageUrl) {
+  if (d.data.photoPath && fs.existsSync(d.data.photoPath)) {
+    try {
+      await ctx.replyWithPhoto({ source: d.data.photoPath });
+    } catch {}
+  } else if (product.imageUrl) {
     try {
       await ctx.replyWithPhoto(product.imageUrl);
     } catch {}
@@ -358,6 +362,34 @@ async function startLinkDetails(ctx, d) {
       'Ex.: CUPOM10 ou “R$20 OFF acima de R$99”.\n\n' +
       'Se não tiver, toque em “Sem cupom”.',
     Markup.keyboard([['Sem cupom'], [BTN.cancel]]).resize()
+  );
+}
+
+async function askLinkPhoto(ctx, d) {
+  d.step = 'link_photo';
+
+  const hasAutomaticImage = Boolean(d.data.product?.imageUrl);
+
+  if (hasAutomaticImage) {
+    return ctx.reply(
+      '📸 E a foto do produto?\n\n' +
+        'Eu encontrei uma imagem automaticamente. Você pode usar essa imagem, mandar outra foto ou enviar sem foto.',
+      Markup.keyboard([
+        ['Usar imagem automática'],
+        ['Enviar outra foto'],
+        ['Sem foto'],
+        [BTN.cancel]
+      ]).resize()
+    );
+  }
+
+  return ctx.reply(
+    '📸 Agora envie a foto do produto.\n\n' +
+      'Se não quiser enviar imagem, toque em “Sem foto”.',
+    Markup.keyboard([
+      ['Sem foto'],
+      [BTN.cancel]
+    ]).resize()
   );
 }
 
@@ -574,22 +606,43 @@ export function startTelegram({ token, adminId }) {
 
   bot.on('photo', async (ctx) => {
     const d = drafts.get(ctx.from.id);
-    if (!d || d.step !== 'photo') return;
+    if (!d) return;
 
-    try {
-      d.data.photoPath = await downloadTelegramPhoto(
-        ctx,
-        ctx.message.photo.at(-1).file_id
-      );
+    if (d.step === 'photo') {
+      try {
+        d.data.photoPath = await downloadTelegramPhoto(
+          ctx,
+          ctx.message.photo.at(-1).file_id
+        );
 
-      d.step = 'text';
+        d.step = 'text';
 
-      await ctx.reply(
-        '✅ Foto recebida. Agora envie o texto da oferta.',
-        Markup.keyboard([[BTN.cancel]]).resize()
-      );
-    } catch (e) {
-      await ctx.reply(`⚠️ ${e.message}`);
+        await ctx.reply(
+          '✅ Foto recebida. Agora envie o texto da oferta.',
+          Markup.keyboard([[BTN.cancel]]).resize()
+        );
+      } catch (e) {
+        await ctx.reply(`⚠️ ${e.message}`);
+      }
+      return;
+    }
+
+    if (d.step === 'link_photo') {
+      try {
+        d.data.photoPath = await downloadTelegramPhoto(
+          ctx,
+          ctx.message.photo.at(-1).file_id
+        );
+
+        await ctx.reply(
+          '✅ Foto recebida. Agora vou montar a oferta ✨',
+          Markup.keyboard([[BTN.cancel]]).resize()
+        );
+
+        return finalizeDraftWithAI(ctx, d);
+      } catch (e) {
+        return ctx.reply(`⚠️ ${e.message}`);
+      }
     }
   });
 
@@ -824,12 +877,57 @@ export function startTelegram({ token, adminId }) {
         d.data.product.couponVerified = true;
       }
 
-      await ctx.reply(
-        '✨ Preparando o texto da oferta…',
-        Markup.keyboard([[BTN.cancel]]).resize()
-      );
+      return askLinkPhoto(ctx, d);
+    }
 
-      return finalizeDraftWithAI(ctx, d);
+    if (d.step === 'link_photo') {
+      if (/^usar imagem automática$/i.test(text)) {
+        if (!d.data.product?.imageUrl) {
+          return ctx.reply(
+            '⚠️ Eu não encontrei uma imagem automática para esse produto. Envie uma foto ou toque em “Sem foto”.'
+          );
+        }
+
+        d.data.photoPath = null;
+
+        await ctx.reply(
+          '✅ Vou usar a imagem encontrada. Preparando a oferta ✨',
+          Markup.keyboard([[BTN.cancel]]).resize()
+        );
+
+        return finalizeDraftWithAI(ctx, d);
+      }
+
+      if (/^enviar outra foto$/i.test(text)) {
+        return ctx.reply(
+          '📸 Pode enviar a foto do produto agora.',
+          Markup.keyboard([['Sem foto'], [BTN.cancel]]).resize()
+        );
+      }
+
+      if (/^sem foto$/i.test(text) || isNo(text)) {
+        d.data.photoPath = null;
+
+        if (d.data.product) {
+          d.data.product.imageUrl = null;
+        }
+
+        await ctx.reply(
+          '✨ Certo. Vou montar a oferta sem foto.',
+          Markup.keyboard([[BTN.cancel]]).resize()
+        );
+
+        return finalizeDraftWithAI(ctx, d);
+      }
+
+      return ctx.reply(
+        '📸 Envie uma foto do produto ou escolha uma das opções abaixo.',
+        Markup.keyboard(
+          d.data.product?.imageUrl
+            ? [['Usar imagem automática'], ['Enviar outra foto'], ['Sem foto'], [BTN.cancel]]
+            : [['Sem foto'], [BTN.cancel]]
+        ).resize()
+      );
     }
 
     if (d.step === 'wa_phone') {
