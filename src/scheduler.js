@@ -1,50 +1,104 @@
-import cron from 'node-cron';
-import { readStore, markSent, peekNext } from './store.js';
-import { isWhatsAppConnected, sendOfferToGroup } from './whatsapp.js';
+import { config } from './config.js';
+import { generateOfferCopy } from './ai.js';
+import { discoverShopeeOffers } from './discovery.js';
+import { getShopeeProduct, generateShopeeShortLink, isShopeeConfigured } from './shopee.js';
+import { markSent, readStore, updateStore } from './store.js';
+import { sendOfferToGroups } from './whatsapp.js';
 
-let job10 = null;
-let job22 = null;
-let running = false;
+let busy = false;
+let lastSlot = '';
+let lastDiscoveryBucket = -1;
 
-async function tick() {
-  if (running) return;
-  running = true;
-  try {
-    const store = readStore();
-    if (store.paused) return;
-    if (!store.targetGroupJid) return;
-    if (!isWhatsAppConnected()) return;
-
-    const item = peekNext();
-    if (!item) return;
-
-    await sendOfferToGroup(store.targetGroupJid, item);
-    markSent(item.id);
-    console.log(`✅ Oferta ${item.id} enviada para ${store.targetGroupName || 'grupo'}.`);
-  } catch (err) {
-    console.error('Erro no envio agendado:', err?.message || err);
-  } finally {
-    running = false;
-  }
+function nowParts() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour), minute: Number(parts.minute) };
 }
 
-export function startScheduler({ timezone, include22 }) {
-  // 08:00, 08:10 ... 21:50 = 84 envios possíveis por dia.
-  job10 = cron.schedule('*/10 8-21 * * *', tick, { timezone });
+function eligibleTime() {
+  const { hour, minute } = nowParts();
+  const maxHour = config.include22 ? 22 : 21;
+  if (hour < 8 || hour > maxHour) return false;
+  if (hour === 22 && minute > 0 && config.include22) return false;
+  return minute % config.sendIntervalMinutes === 0;
+}
 
-  // Opcional: também envia exatamente às 22:00.
-  if (include22) {
-    job22 = cron.schedule('0 22 * * *', tick, { timezone });
+function removeUnverifiedCouponClaims(item) {
+  const s = readStore();
+  if (!s.safeCouponsOnly || item.couponVerified || item.product?.couponVerified) return item;
+  const original = String(item.text || '');
+  const lines = original.split('\n');
+  const safe = lines.filter(line => !/\b(cupom|voucher|c[oó]digo promocional|use o c[oó]digo)\b/i.test(line));
+  if (safe.length !== lines.length) {
+    item.text = safe.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    updateStore(x => { x.metrics.blockedCoupons += 1; return x; });
   }
+  return item;
+}
 
-  console.log(`⏰ Agendador ativo: a cada 10 min, 08:00–21:50${include22 ? ' + 22:00' : ''} (${timezone}).`);
+async function refreshBeforeSend(item) {
+  item = removeUnverifiedCouponClaims(item);
+  if (item.product?.platform !== 'shopee' || !isShopeeConfigured() || !item.product.itemId || !item.product.shopId) return item;
+  try {
+    const fresh = await getShopeeProduct({ itemId: item.product.itemId, shopId: item.product.shopId });
+    if (!fresh) throw new Error('Produto não encontrado na API');
+    fresh.affiliateLink = await generateShopeeShortLink(fresh.productLink, ['whatsapp', 'auri']);
+    const oldPrice = Number(item.product.price || 0);
+    const newPrice = Number(fresh.price || 0);
+    const changed = oldPrice > 0 && newPrice > 0 && Math.abs(newPrice - oldPrice) >= 0.01;
+    item.product = fresh;
+    item.link = fresh.affiliateLink || item.link;
+    if (changed && item.aiGenerated) {
+      const copy = await generateOfferCopy(fresh, 'O preço foi atualizado antes do envio.');
+      item.text = copy.text;
+      item.aiProvider = copy.provider;
+    }
+  } catch (e) {
+    item.refreshWarning = e.message;
+  }
+  return item;
 }
 
 export async function sendOneNow() {
-  return tick();
+  if (busy) throw new Error('Já existe um envio em andamento.');
+  busy = true;
+  try {
+    const s = readStore();
+    if (!s.queue.length) throw new Error('A fila está vazia.');
+    const groups = s.targetGroups?.length ? s.targetGroups : (s.targetGroupJid ? [{ jid: s.targetGroupJid, name: s.targetGroupName || 'Grupo' }] : []);
+    if (!groups.length) throw new Error('Escolha pelo menos um grupo.');
+    const item = await refreshBeforeSend({ ...s.queue[0] });
+    const sentCount = await sendOfferToGroups(groups, item);
+    updateStore(x => {
+      x.queue.shift();
+      x.metrics.sentMessages += sentCount;
+      return x;
+    });
+    markSent(item);
+    return { item, sentCount };
+  } finally { busy = false; }
 }
 
-export function stopScheduler() {
-  job10?.stop();
-  job22?.stop();
+async function tick() {
+  const p = nowParts();
+  const slot = `${p.date}-${p.hour}:${p.minute}`;
+  const s = readStore();
+  if (!s.paused && eligibleTime() && slot !== lastSlot && s.queue.length) {
+    lastSlot = slot;
+    try { await sendOneNow(); } catch (e) { console.error('Envio automático:', e.message); }
+  }
+
+  const bucket = Math.floor(Date.now() / (config.discoveryEveryMinutes * 60000));
+  if (s.autoDiscovery && bucket !== lastDiscoveryBucket) {
+    lastDiscoveryBucket = bucket;
+    discoverShopeeOffers().catch(e => console.error('Busca automática:', e.message));
+  }
+}
+
+export function startScheduler() {
+  setInterval(() => tick().catch(console.error), 15000);
+  setTimeout(() => tick().catch(console.error), 3000);
+  console.log(`⏰ Scheduler ativo: ${config.sendIntervalMinutes} min, 08h–${config.include22 ? '22h' : '21h'}.`);
 }
