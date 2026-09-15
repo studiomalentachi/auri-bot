@@ -224,9 +224,12 @@ export async function sendOfferToGroup(groupJid, item) {
     throw new Error('Nenhum grupo foi escolhido.');
   }
 
-  const caption = [item.text?.trim(), item.link?.trim()]
-    .filter(Boolean)
-    .join('\n\n');
+  const text = item.text?.trim() || '';
+const link = item.link?.trim() || '';
+
+const caption = link
+  ? `${text}\n\n🛍️ Compre aqui: ${link}`
+  : text;
 
   if (item.photoPath && fs.existsSync(item.photoPath)) {
     const image = fs.readFileSync(item.photoPath);
