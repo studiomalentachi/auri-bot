@@ -10,6 +10,7 @@ import { getShopeeConversions, isShopeeConfigured } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
+import { buildMeliAuthorizationUrl, exchangeMeliAuthorizationCode, meliOAuthStatus } from './mercadolivre.js';
 
 const drafts = new Map();
 let lastGroups = [];
@@ -73,6 +74,7 @@ function statusText() {
     `Horário: 08:00–22:00 | ${config.sendIntervalMinutes} min\n` +
     `IA escolhida: ${s.aiProvider || 'auto'} | disponíveis: ${aiOn}\n` +
     `Shopee Open API: ${isShopeeConfigured() ? '✅' : '⚠️ não configurada'}\n` +
+    `Mercado Livre API: ${meliOAuthStatus().authorized ? '✅ conectada' : (meliOAuthStatus().configured ? '⚠️ falta autorizar (/meli)' : '⚠️ não configurada')}\n` +
     `Auto busca: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'} | ` +
     `Auto fila: ${s.autoQueueDiscovery ? '✅' : '❌'}\n` +
     `Enviadas: ${s.metrics.sentOffers} ofertas / ${s.metrics.sentMessages} mensagens`
@@ -584,6 +586,68 @@ async function showResults(ctx) {
   }
 }
 
+
+function extractMeliAuthorization(text) {
+  const raw = String(text || '').trim();
+
+  try {
+    const u = new URL(raw);
+
+    return {
+      code: u.searchParams.get('code') || '',
+      state: u.searchParams.get('state') || ''
+    };
+  } catch {
+    return {
+      code: raw,
+      state: ''
+    };
+  }
+}
+
+async function beginMeliAuthorization(ctx) {
+  const status = meliOAuthStatus();
+
+  if (!status.configured) {
+    return ctx.reply(
+      '⚠️ Ainda faltam MELI_CLIENT_ID, MELI_CLIENT_SECRET ou MELI_REDIRECT_URI no Railway.',
+      mainMenu()
+    );
+  }
+
+  const state = crypto.randomBytes(16).toString('hex');
+  const url = buildMeliAuthorizationUrl(state);
+
+  drafts.set(ctx.from.id, {
+    step: 'meli_authorize',
+    mode: 'meli_oauth',
+    data: { state }
+  });
+
+  return ctx.reply(
+    '💛 Vamos autorizar a Auri no Mercado Livre.\n\n' +
+      '1. Toque no botão abaixo.\n' +
+      '2. Autorize a aplicação Auri.\n' +
+      '3. Você será levada para o site Universo da Esther.\n' +
+      '4. Copie o endereço COMPLETO da barra do navegador e cole aqui no Telegram.\n\n' +
+      'Não envie Client Secret, Access Token ou Refresh Token aqui.',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.url(
+          '🔐 Autorizar Mercado Livre',
+          url
+        )
+      ],
+      [
+        Markup.button.callback(
+          '❌ Cancelar',
+          'meli:cancel'
+        )
+      ]
+    ])
+  );
+}
+
 export function startTelegram({ token, adminId }) {
   const bot = new Telegraf(token);
   bot.use(onlyAdmin(adminId));
@@ -603,6 +667,8 @@ export function startTelegram({ token, adminId }) {
   bot.command('status', (ctx) =>
     ctx.reply(statusText(), mainMenu())
   );
+
+  bot.command('meli', (ctx) => beginMeliAuthorization(ctx));
 
   bot.on('photo', async (ctx) => {
     const d = drafts.get(ctx.from.id);
@@ -727,6 +793,52 @@ export function startTelegram({ token, adminId }) {
     if (text === BTN.cancel) {
       drafts.delete(ctx.from.id);
       return ctx.reply('Cancelado.', mainMenu());
+    }
+
+
+    if (d.step === 'meli_authorize') {
+      const auth = extractMeliAuthorization(text);
+
+      if (!auth.code) {
+        return ctx.reply(
+          '⚠️ Não encontrei o código de autorização. Cole o endereço COMPLETO da barra do navegador depois de autorizar.'
+        );
+      }
+
+      if (
+        auth.state &&
+        auth.state !== d.data.state
+      ) {
+        return ctx.reply(
+          '⚠️ Essa autorização não corresponde à solicitação atual. Digite /meli e tente novamente.'
+        );
+      }
+
+      await ctx.reply(
+        '⏳ Conectando a Auri ao Mercado Livre…'
+      );
+
+      try {
+        await exchangeMeliAuthorizationCode(
+          auth.code
+        );
+
+        drafts.delete(ctx.from.id);
+
+        return ctx.reply(
+          '✅ Mercado Livre conectado à Auri!\n\n' +
+            'O token será renovado automaticamente e salvo no volume do Railway.',
+          mainMenu()
+        );
+      } catch (e) {
+        drafts.delete(ctx.from.id);
+
+        return ctx.reply(
+          `⚠️ Não consegui concluir a autorização: ${e.message}\n\n` +
+            'Digite /meli para gerar uma nova autorização.',
+          mainMenu()
+        );
+      }
     }
 
     if (
@@ -982,6 +1094,21 @@ export function startTelegram({ token, adminId }) {
         return ctx.reply(`⚠️ ${e.message}`, mainMenu());
       }
     }
+  });
+
+  bot.action('meli:cancel', async (ctx) => {
+    drafts.delete(ctx.from.id);
+
+    await ctx.answerCbQuery('Cancelado.');
+
+    await ctx.editMessageText(
+      '❌ Autorização do Mercado Livre cancelada.'
+    );
+
+    await ctx.reply(
+      '💜 Painel da Auri',
+      mainMenu()
+    );
   });
 
   bot.action(/^approve:(.+)$/, async (ctx) => {
