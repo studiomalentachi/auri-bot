@@ -10,43 +10,79 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 
 const logger = pino({ level: 'silent' });
+
 let sock = null;
 let connected = false;
 let reconnectTimer = null;
 let authRegistered = false;
 
+let pendingPairing = null;
+let pairingTimeout = null;
+
 export function isWhatsAppConnected() {
   return connected;
 }
 
-export async function startWhatsApp() {
-  const baseDir = process.env.PERSIST_DIR ? path.resolve(process.env.PERSIST_DIR) : path.resolve('.');
+function clearPairing(error = null, code = null) {
+  if (pairingTimeout) {
+    clearTimeout(pairingTimeout);
+    pairingTimeout = null;
+  }
+
+  const pending = pendingPairing;
+  pendingPairing = null;
+
+  if (!pending) return;
+
+  if (error) pending.reject(error);
+  else pending.resolve(code);
+}
+
+async function createSocket() {
+  const baseDir = process.env.PERSIST_DIR
+    ? path.resolve(process.env.PERSIST_DIR)
+    : path.resolve('.');
+
   const authDir = path.join(baseDir, 'wa_auth');
   fs.mkdirSync(authDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   authRegistered = Boolean(state.creds?.registered);
+
   const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
+  const localSock = makeWASocket({
     version,
     auth: state,
     logger,
-    browser: Browsers.macOS('Chrome'),
+    browser: Browsers.macOS('Desktop'),
     markOnlineOnConnect: false,
     syncFullHistory: false
   });
 
-  sock.ev.on('creds.update', async () => {
+  sock = localSock;
+
+  localSock.ev.on('creds.update', async () => {
     await saveCreds();
-    authRegistered = Boolean(sock?.authState?.creds?.registered);
+    authRegistered = Boolean(state.creds?.registered);
   });
 
-  sock.ev.on('connection.update', async (update) => {
+  localSock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      console.log('\nEscaneie este QR no WhatsApp > Aparelhos conectados:\n');
+    if (qr && pendingPairing && !state.creds?.registered) {
+      try {
+        const code = await localSock.requestPairingCode(pendingPairing.digits);
+        const formatted = String(code || '')
+          .replace(/(.{4})/g, '$1-')
+          .replace(/-$/, '');
+
+        clearPairing(null, formatted);
+      } catch (err) {
+        console.error('Erro ao gerar código de pareamento:', err?.message || err);
+      }
+    } else if (qr && !pendingPairing) {
+      console.log('\nQR disponível para pareamento manual:\n');
       qrcode.generate(qr, { small: true });
     }
 
@@ -58,51 +94,123 @@ export async function startWhatsApp() {
 
     if (connection === 'close') {
       connected = false;
+
+      if (sock !== localSock) return;
+
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
-      console.log(loggedOut ? '❌ WhatsApp desconectado da conta.' : '⚠️ WhatsApp caiu; tentando reconectar...');
 
-      if (!loggedOut && !reconnectTimer) {
+      console.log(
+        loggedOut
+          ? '❌ WhatsApp desconectado da conta.'
+          : `⚠️ WhatsApp caiu (${statusCode || 'sem código'}); tentando reconectar...`
+      );
+
+      if (loggedOut) {
+        if (pendingPairing) {
+          clearPairing(new Error('O WhatsApp encerrou a sessão. Gere um novo código.'));
+        }
+        return;
+      }
+
+      if (!reconnectTimer) {
         reconnectTimer = setTimeout(async () => {
           reconnectTimer = null;
-          try { await startWhatsApp(); } catch (e) { console.error(e); }
-        }, 5000);
+          try {
+            await createSocket();
+          } catch (e) {
+            console.error('Erro ao reconectar WhatsApp:', e?.message || e);
+          }
+        }, pendingPairing ? 1500 : 5000);
       }
     }
   });
 
-  return sock;
+  return localSock;
 }
 
+export async function startWhatsApp() {
+  if (sock) return sock;
+  return createSocket();
+}
+
+async function startFreshSocketForPairing() {
+  const oldSock = sock;
+
+  sock = null;
+  connected = false;
+
+  try {
+    oldSock?.ws?.close();
+  } catch {
+    // o socket antigo pode já estar fechado
+  }
+
+  return createSocket();
+}
 
 export async function requestWhatsAppPairingCode(phoneNumber) {
-  if (!sock) throw new Error('WhatsApp ainda não foi inicializado.');
-  if (connected || authRegistered || sock?.authState?.creds?.registered) {
+  if (connected || authRegistered) {
     throw new Error('Este WhatsApp já está conectado.');
   }
 
   const digits = String(phoneNumber || '').replace(/\D/g, '');
+
   if (digits.length < 10 || digits.length > 15) {
-    throw new Error('Número inválido. Envie com DDI e DDD, somente números. Ex.: 5544999999999');
+    throw new Error(
+      'Número inválido. Envie com DDI e DDD, somente números. Ex.: 5544999999999'
+    );
   }
 
-  const code = await sock.requestPairingCode(digits);
-  return String(code || '').replace(/(.{4})/g, '$1-').replace(/-$/, '');
+  if (pendingPairing) {
+    clearPairing(new Error('A solicitação anterior foi substituída por uma nova.'));
+  }
+
+  return new Promise(async (resolve, reject) => {
+    pendingPairing = { digits, resolve, reject };
+
+    pairingTimeout = setTimeout(() => {
+      clearPairing(
+        new Error('O WhatsApp demorou para liberar o pareamento. Toque em WhatsApp e tente novamente.')
+      );
+    }, 45000);
+
+    try {
+      await startFreshSocketForPairing();
+    } catch (err) {
+      clearPairing(err);
+    }
+  });
 }
 
 export async function listWhatsAppGroups() {
-  if (!sock || !connected) throw new Error('WhatsApp ainda não está conectado.');
+  if (!sock || !connected) {
+    throw new Error('WhatsApp ainda não está conectado.');
+  }
+
   const groups = await sock.groupFetchAllParticipating();
+
   return Object.values(groups)
-    .map((g) => ({ jid: g.id, name: g.subject || 'Grupo sem nome', size: g.participants?.length || 0 }))
+    .map((g) => ({
+      jid: g.id,
+      name: g.subject || 'Grupo sem nome',
+      size: g.participants?.length || 0
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
 
 export async function sendOfferToGroup(groupJid, item) {
-  if (!sock || !connected) throw new Error('WhatsApp não conectado.');
-  if (!groupJid) throw new Error('Nenhum grupo foi escolhido.');
+  if (!sock || !connected) {
+    throw new Error('WhatsApp não conectado.');
+  }
 
-  const caption = [item.text?.trim(), item.link?.trim()].filter(Boolean).join('\n\n');
+  if (!groupJid) {
+    throw new Error('Nenhum grupo foi escolhido.');
+  }
+
+  const caption = [item.text?.trim(), item.link?.trim()]
+    .filter(Boolean)
+    .join('\n\n');
 
   if (item.photoPath && fs.existsSync(item.photoPath)) {
     const image = fs.readFileSync(item.photoPath);
