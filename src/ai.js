@@ -113,7 +113,9 @@ async function callAnthropic(prompt) {
     throw new Error(json?.error?.message || `Anthropic HTTP ${res.status}`);
   }
 
-  return cleanText(json?.content?.map((c) => c.text || '').join('\n'));
+  return cleanText(
+    json?.content?.map((c) => c.text || '').join('\n')
+  );
 }
 
 export async function askAI(prompt) {
@@ -122,15 +124,24 @@ export async function askAI(prompt) {
   for (const p of providerOrder()) {
     try {
       if (p === 'openai' && process.env.OPENAI_API_KEY) {
-        return { text: await callOpenAI(prompt), provider: 'openai' };
+        return {
+          text: await callOpenAI(prompt),
+          provider: 'openai'
+        };
       }
 
       if (p === 'gemini' && process.env.GEMINI_API_KEY) {
-        return { text: await callGemini(prompt), provider: 'gemini' };
+        return {
+          text: await callGemini(prompt),
+          provider: 'gemini'
+        };
       }
 
       if (p === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
-        return { text: await callAnthropic(prompt), provider: 'anthropic' };
+        return {
+          text: await callAnthropic(prompt),
+          provider: 'anthropic'
+        };
       }
     } catch (e) {
       errors.push(`${p}: ${e.message}`);
@@ -138,7 +149,9 @@ export async function askAI(prompt) {
   }
 
   throw new Error(
-    errors.length ? errors.join(' | ') : 'Nenhuma IA configurada'
+    errors.length
+      ? errors.join(' | ')
+      : 'Nenhuma IA configurada'
   );
 }
 
@@ -181,6 +194,22 @@ function verifiedCoupon(product) {
   return String(code).trim() || null;
 }
 
+function discountLabel(product) {
+  const current = Number(product.price || product.priceMin || 0);
+  const old = Number(product.originalPrice || product.priceBefore || 0);
+  const pct = Number(product.discountPct || 0);
+
+  if (old > current && current > 0) {
+    return `De ${money(old)} por ${money(current)}`;
+  }
+
+  if (pct > 0) {
+    return `${Math.round(pct)}% de desconto`;
+  }
+
+  return null;
+}
+
 export function fallbackOfferCopy(product) {
   const price = money(product.price || product.priceMin);
   const rating = Number(product.rating || 0);
@@ -189,17 +218,22 @@ export function fallbackOfferCopy(product) {
     ? ''
     : String(product.name).trim();
   const coupon = verifiedCoupon(product);
+  const discount = discountLabel(product);
 
   const title = name
     ? `😍 OLHA ESSE ACHADO: ${
-        name.length > 52 ? `${name.slice(0, 49)}...` : name
+        name.length > 52
+          ? `${name.slice(0, 49)}...`
+          : name
       }`
     : '😍 OLHA ESSE ACHADO QUE EU ENCONTREI';
 
   const lines = [title.toUpperCase()];
 
-  if (price) {
-    lines.push(`\nTá saindo por ${price}.`);
+  if (discount) {
+    lines.push(`\n🔥 ${discount}`);
+  } else if (price) {
+    lines.push(`\nPor ${price}.`);
   }
 
   lines.push(
@@ -210,11 +244,15 @@ export function fallbackOfferCopy(product) {
     const bits = [];
 
     if (rating > 0) {
-      bits.push(`⭐ ${rating.toFixed(1).replace('.', ',')}`);
+      bits.push(
+        `⭐ ${rating.toFixed(1).replace('.', ',')}`
+      );
     }
 
     if (sales > 0) {
-      bits.push(`${sales.toLocaleString('pt-BR')} vendidos`);
+      bits.push(
+        `${sales.toLocaleString('pt-BR')} vendidos`
+      );
     }
 
     lines.push(`\n${bits.join(' • ')}`);
@@ -231,24 +269,30 @@ export async function generateOfferCopy(product, extra = '') {
   const prompt = `Você escreve mensagens de ofertas para um grupo brasileiro de achadinhos no WhatsApp.
 
 ESTILO OBRIGATÓRIO:
-- Escreva como uma pessoa real indicando um produto para amigas, nunca como anúncio corporativo e nunca com cara de IA.
-- O texto precisa ser mais completo, parecido com mensagens de grupo de promoções: de 5 a 9 linhas, com respiros entre os blocos.
+- Escreva como uma pessoa real indicando um produto para amigas.
+- Nunca escreva como anúncio corporativo e nunca deixe o texto com cara de IA.
+- Faça um texto de 5 a 9 linhas, com respiros entre os blocos.
 - Comece com um título chamativo, espontâneo e ESPECÍFICO em caixa alta, com 1 emoji.
-- Exemplos de tom: "🙋‍♀️ ISSO AQUI FACILITA MUITO ARRUMAR O CABELO", "🚨 ESSE JOGO DE TAÇAS TÁ LINDO DEMAIS", "😍 OLHA O QUE EU ACHEI PRA ORGANIZAR A COZINHA". Não copie esses títulos se não combinarem com o produto.
-- Depois diga o que é o produto e o preço, se o preço estiver nos dados.
-- Em seguida escreva 1 parágrafo natural de 2 a 3 frases explicando por que é útil, bonito, prático ou interessante.
-- Use detalhes reais dos dados; não invente características.
-- Se houver avaliação e/ou vendas, coloque uma linha separada com ⭐ e esses números.
-- Se houver um cupom REAL E VERIFICADO nos dados, coloque uma linha separada: "🎟️ Cupom: CÓDIGO". Se não houver cupom verificado, NÃO mencione cupom.
-- Pode usar humor leve e linguagem informal brasileira, tipo "pra quem...", "sem ficar...", "eu achei...", quando fizer sentido.
-- Use de 2 a 5 emojis no texto inteiro, sem exagerar.
+- Exemplos de TOM: "🙋‍♀️ ISSO AQUI FACILITA MUITO ARRUMAR O CABELO", "🚨 ESSE JOGO DE TAÇAS TÁ LINDO DEMAIS", "😍 OLHA O QUE EU ACHEI PRA ORGANIZAR A COZINHA". Não copie os exemplos se não combinarem com o produto.
+- Fale claramente o preço atual quando existir.
+- Se houver preço anterior e preço atual, destaque a mudança de preço de forma natural: "de R$ X por R$ Y".
+- Se houver porcentagem de desconto, mencione o desconto.
+- Se houver preço anterior E porcentagem, você pode usar os dois sem ficar repetitivo.
+- Depois explique em 2 ou 3 frases por que o produto é bonito, útil, prático ou interessante.
+- Use somente características presentes nos dados. Se os dados não informarem uma característica, não invente.
+- Se houver avaliação e/ou vendas, coloque uma linha separada com ⭐.
+- Se houver um cupom REAL informado nos dados, coloque uma linha separada: "🎟️ Cupom: ...".
+- Se não houver cupom, NÃO fale sobre cupom.
+- Pode usar humor leve e linguagem informal brasileira: "pra quem...", "sem ficar...", "eu achei...", quando fizer sentido.
+- Use de 2 a 5 emojis no texto inteiro.
 
 NUNCA FAÇA:
-- Não escreva "Produto Shopee", "Produto SHEIN", "Produto Amazon", "Produto Mercado Livre" ou apenas "Produto" como título ou descrição.
-- Não cite o nome do marketplace no texto, a menos que seja indispensável.
+- Não escreva "Produto Shopee", "Produto SHEIN", "Produto Amazon", "Produto Mercado Livre" nem apenas "Produto".
+- Não cite o marketplace no texto.
 - Não use frases genéricas como "produto incrível", "imperdível", "você merece", "eleve sua rotina" ou "achadinho que vale a pena".
-- Não invente preço, avaliação, quantidade vendida, desconto, cupom, frete, material, tamanho ou benefício.
-- Não escreva o link e não escreva "Compre aqui"; o sistema adiciona o link depois.
+- Não invente preço, avaliação, vendas, desconto, cupom, frete, material, tamanho ou benefício.
+- Não escreva link.
+- Não escreva "Compre aqui"; o sistema adiciona isso depois.
 
 DADOS DO PRODUTO:
 ${JSON.stringify(product, null, 2)}
