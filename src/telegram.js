@@ -168,6 +168,48 @@ function discountText(product) {
   return '';
 }
 
+
+const COPY_ANGLES = [
+  'Foque na praticidade e no problema que o produto resolve no dia a dia.',
+  'Foque no visual, no estilo e no motivo de o produto chamar atenção.',
+  'Foque no custo-benefício e na sensação de ter encontrado uma boa oportunidade.',
+  'Foque em uma situação real de uso, como se estivesse indicando para uma amiga.',
+  'Foque no detalhe mais interessante do produto e crie curiosidade logo no título.',
+  'Foque em para quem esse produto faz sentido, usando uma abertura do tipo “pra quem...” sem ficar repetitiva.'
+];
+
+function nextCopyAngle(d, first = false) {
+  if (first || !Number.isInteger(d.data.copyVariant)) {
+    d.data.copyVariant = crypto.randomInt(COPY_ANGLES.length);
+  } else {
+    d.data.copyVariant = (d.data.copyVariant + 1) % COPY_ANGLES.length;
+  }
+
+  return COPY_ANGLES[d.data.copyVariant];
+}
+
+function firstCopyInstruction(d) {
+  const angle = nextCopyAngle(d, true);
+
+  return (
+    `VARIAÇÃO DE TEXTO: ${angle}\n` +
+    'Não use sempre a mesma fórmula de abertura. Varie título, emoji inicial, construção das frases e ritmo do texto.'
+  );
+}
+
+function regenerateInstruction(d, previousText) {
+  const angle = nextCopyAngle(d, false);
+  d.data.regenCount = Number(d.data.regenCount || 0) + 1;
+
+  return (
+    `NOVA VERSÃO Nº ${d.data.regenCount}: ${angle}\n` +
+    'Crie uma versão realmente diferente da anterior. ' +
+    'Mude o título, o emoji inicial, a primeira frase, a ordem das ideias e a forma de apresentar o preço/desconto. ' +
+    'Não reutilize frases inteiras nem apenas troque algumas palavras.\n\n' +
+    `TEXTO ANTERIOR — NÃO COPIAR:\n${previousText}`
+  );
+}
+
 async function beginManual(ctx) {
   drafts.set(ctx.from.id, {
     step: 'photo',
@@ -234,7 +276,7 @@ async function finalizeDraftWithAI(ctx, d) {
     );
   }
 
-  const copy = await generateOfferCopy(product);
+  const copy = await generateOfferCopy(product, firstCopyInstruction(d));
 
   d.step = 'confirm';
   d.data.id = d.data.id || crypto.randomBytes(3).toString('hex');
@@ -877,8 +919,10 @@ export function startTelegram({ token, adminId }) {
 
     await ctx.answerCbQuery('Gerando…');
 
+    const previousText = d.data.text || '';
     const copy = await generateOfferCopy(
-      d.data.product || {}
+      d.data.product || {},
+      regenerateInstruction(d, previousText)
     );
 
     d.data.text = copy.text;
