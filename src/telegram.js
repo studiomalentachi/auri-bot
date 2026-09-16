@@ -262,7 +262,10 @@ async function previewOffer(ctx, d) {
     preview,
     Markup.inlineKeyboard([
       [Markup.button.callback('✅ Salvar na fila', `approve:${d.data.id}`)],
-      [Markup.button.callback('✨ Gerar outro texto', `regen:${d.data.id}`)],
+      [
+        Markup.button.callback('✏️ Editar texto', `edit:${d.data.id}`),
+        Markup.button.callback('✨ Gerar outro texto', `regen:${d.data.id}`)
+      ],
       [Markup.button.callback('❌ Cancelar', `reject:${d.data.id}`)]
     ])
   );
@@ -1210,6 +1213,30 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
+    if (d.step === 'edit_text') {
+      const edited = String(text || '').trim();
+
+      if (!edited) {
+        return ctx.reply(
+          '⚠️ O texto ficou vazio. Envie o texto completo que você quer usar.'
+        );
+      }
+
+      d.data.text = edited;
+      d.data.aiGenerated = false;
+      d.data.manuallyEdited = true;
+      d.step = 'confirm';
+
+      drafts.set(ctx.from.id, d);
+
+      await ctx.reply(
+        '✅ Texto atualizado. Confira a prévia:',
+        Markup.removeKeyboard()
+      );
+
+      return previewOffer(ctx, d);
+    }
+
     if (d.step === 'suggestion_affiliate_link') {
       const affiliateUrl =
         String(text || '').trim();
@@ -1357,6 +1384,34 @@ export function startTelegram({ token, adminId }) {
     await ctx.reply(
       '💜 Painel da Auri',
       mainMenu()
+    );
+  });
+
+  bot.action(/^edit:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = ctx.match[1];
+
+    if (
+      !d ||
+      d.data.id !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Prévia expirou.'
+      );
+    }
+
+    d.step = 'edit_text';
+    drafts.set(ctx.from.id, d);
+
+    await ctx.answerCbQuery(
+      'Editar texto'
+    );
+
+    return ctx.reply(
+      '✏️ Envie agora o texto COMPLETO que você quer usar.\n\n' +
+        'Pode mudar título, emojis, preço destacado, descrição — o que quiser.\n\n' +
+        'O link de afiliada NÃO precisa ser colocado no texto; a Auri adiciona automaticamente no envio.',
+      Markup.keyboard([[BTN.cancel]]).resize()
     );
   });
 
