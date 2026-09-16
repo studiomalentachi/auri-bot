@@ -194,17 +194,18 @@ Formato exato:
       },
       body: JSON.stringify({
         model,
+        reasoning: { effort: 'none' },
         tools: [
           {
             type: 'web_search',
-            search_context_size: 'medium',
+            search_context_size: 'low',
             filters: {
               allowed_domains: MARKETPLACE_DOMAINS
             }
           }
         ],
         input: prompt,
-        max_output_tokens: 6000
+        max_output_tokens: 2600
       })
     }
   );
@@ -212,10 +213,24 @@ Formato exato:
   const json = await res.json();
 
   if (!res.ok) {
-    throw new Error(
+    const raw =
       json?.error?.message ||
-      `OpenAI Web Search HTTP ${res.status}`
-    );
+      `OpenAI Web Search HTTP ${res.status}`;
+
+    if (
+      res.status === 429 ||
+      /rate limit|tokens per min|tpm/i.test(raw)
+    ) {
+      throw new Error(
+        'A pesquisa atingiu o limite temporário da API da OpenAI. ' +
+        'A Auri foi ajustada para pesquisar em lotes menores. ' +
+        'Se a conta da API estiver sem faturamento ativo, pode ser necessário ' +
+        'adicionar créditos/método de pagamento na OpenAI Platform ou aguardar ' +
+        'o prazo de liberação mostrado pela própria API.'
+      );
+    }
+
+    throw new Error(raw);
   }
 
   const rows = parseArray(extractOutputText(json));

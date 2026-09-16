@@ -37,11 +37,11 @@ export const config = {
   // = até 96 candidatas antes de deduplicar/filtrar.
   discoveryEveryMinutes: Math.max(
     60,
-    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)
+    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 60)
   ),
   discoveryMaxPerRun: Math.max(
     3,
-    envInt('AUTO_DISCOVERY_MAX_PER_RUN', 12)
+    envInt('AUTO_DISCOVERY_MAX_PER_RUN', 6)
   ),
   discoveryDailyTarget: Math.max(
     1,
@@ -57,7 +57,7 @@ export const config = {
     1,
     Math.min(
       6,
-      envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 3)
+      envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 2)
     )
   ),
 
