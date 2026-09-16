@@ -264,8 +264,9 @@ async function previewOffer(ctx, d) {
       [Markup.button.callback('✅ Salvar na fila', `approve:${d.data.id}`)],
       [
         Markup.button.callback('✏️ Editar texto', `edit:${d.data.id}`),
-        Markup.button.callback('✨ Gerar outro texto', `regen:${d.data.id}`)
+        Markup.button.callback('📸 Enviar/Trocar foto', `photoedit:${d.data.id}`)
       ],
+      [Markup.button.callback('✨ Gerar outro texto', `regen:${d.data.id}`)],
       [Markup.button.callback('❌ Cancelar', `reject:${d.data.id}`)]
     ])
   );
@@ -771,6 +772,28 @@ export function startTelegram({ token, adminId }) {
         return ctx.reply(`⚠️ ${e.message}`);
       }
     }
+
+
+    if (d.step === 'edit_photo') {
+      try {
+        d.data.photoPath = await downloadTelegramPhoto(
+          ctx,
+          ctx.message.photo.at(-1).file_id
+        );
+
+        d.step = 'confirm';
+        drafts.set(ctx.from.id, d);
+
+        await ctx.reply(
+          '✅ Foto atualizada. Confira a prévia:',
+          Markup.removeKeyboard()
+        );
+
+        return previewOffer(ctx, d);
+      } catch (e) {
+        return ctx.reply(`⚠️ ${e.message}`);
+      }
+    }
   });
 
   bot.on('text', async (ctx, next) => {
@@ -1213,6 +1236,46 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
+    if (
+      d.step === 'edit_photo' &&
+      text.toLowerCase() === 'usar foto automática'
+    ) {
+      d.data.photoPath = null;
+      d.step = 'confirm';
+      drafts.set(ctx.from.id, d);
+
+      await ctx.reply(
+        '✅ Vou usar a foto automática do produto.',
+        Markup.removeKeyboard()
+      );
+
+      return previewOffer(ctx, d);
+    }
+
+    if (
+      d.step === 'edit_photo' &&
+      text.toLowerCase() === 'sem foto'
+    ) {
+      d.data.photoPath = null;
+
+      if (d.data.product) {
+        d.data.product = {
+          ...d.data.product,
+          imageUrl: null
+        };
+      }
+
+      d.step = 'confirm';
+      drafts.set(ctx.from.id, d);
+
+      await ctx.reply(
+        '✅ Foto removida. Confira a prévia:',
+        Markup.removeKeyboard()
+      );
+
+      return previewOffer(ctx, d);
+    }
+
     if (d.step === 'edit_text') {
       const edited = String(text || '').trim();
 
@@ -1384,6 +1447,42 @@ export function startTelegram({ token, adminId }) {
     await ctx.reply(
       '💜 Painel da Auri',
       mainMenu()
+    );
+  });
+
+  bot.action(/^photoedit:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = ctx.match[1];
+
+    if (
+      !d ||
+      d.data.id !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Prévia expirou.'
+      );
+    }
+
+    d.step = 'edit_photo';
+    drafts.set(ctx.from.id, d);
+
+    await ctx.answerCbQuery(
+      'Enviar foto'
+    );
+
+    const rows = [];
+
+    if (d.data.product?.imageUrl) {
+      rows.push(['Usar foto automática']);
+    }
+
+    rows.push(['Sem foto']);
+    rows.push([BTN.cancel]);
+
+    return ctx.reply(
+      '📸 Envie agora a foto que você quer usar nessa oferta.\n\n' +
+        'Pode mandar qualquer foto do produto pelo Telegram. Ela vai substituir a imagem automática apenas nessa oferta.',
+      Markup.keyboard(rows).resize()
     );
   });
 
