@@ -879,6 +879,85 @@ export function startTelegram({ token, adminId }) {
       return previewOffer(ctx, d);
     }
 
+    if (d.step === 'meli_affiliate_product_url') {
+      const affiliateUrl = String(text || '').trim();
+      const lower = affiliateUrl.toLowerCase();
+
+      if (
+        !/^https?:\/\//i.test(affiliateUrl) ||
+        !(
+          lower.includes('meli.la') ||
+          lower.includes('mercadolivre.com') ||
+          lower.includes('mercadolibre.com')
+        )
+      ) {
+        return ctx.reply(
+          '⚠️ Esse não parece ser um link do Mercado Livre. Cole o link de afiliada gerado pelo Mercado Livre.'
+        );
+      }
+
+      await ctx.reply(
+        '⏳ Identificando o produto pelo seu link de afiliada…'
+      );
+
+      try {
+        const product = await importProductFromUrl(
+          affiliateUrl
+        );
+
+        const identified =
+          product &&
+          product.platform === 'mercadolivre' &&
+          !isPlaceholderName(product.name) &&
+          Number(product.price || 0) > 0;
+
+        if (!identified) {
+          return ctx.reply(
+            '⚠️ Eu consegui abrir o link, mas o Mercado Livre não me devolveu os dados completos desse produto.\\n\\n' +
+              'Tente gerar novamente o link de afiliada diretamente na página desse produto e cole aqui. Você não precisa escrever nome, preço ou foto.',
+            Markup.keyboard([[BTN.cancel]]).resize()
+          );
+        }
+
+        product.affiliateLink = affiliateUrl;
+
+        const d2 = {
+          step: 'confirm',
+          mode: 'meli_affiliate_link',
+          data: {
+            id: crypto.randomBytes(3).toString('hex'),
+            link: affiliateUrl,
+            photoPath: null,
+            product
+          }
+        };
+
+        drafts.set(ctx.from.id, d2);
+
+        const priceText = Number(product.price || 0)
+          .toLocaleString('pt-BR', {
+            style: 'currency',
+            currency: 'BRL'
+          });
+
+        await ctx.reply(
+          '✅ Produto identificado automaticamente!\\n\\n' +
+            `📦 ${product.name}\\n` +
+            `💰 ${priceText}\\n` +
+            `${product.imageUrl ? '📸 Foto encontrada\\n' : ''}` +
+            '\\n✨ Agora vou criar o texto da oferta.'
+        );
+
+        return finalizeDraftWithAI(ctx, d2);
+      } catch (e) {
+        return ctx.reply(
+          `⚠️ Não consegui identificar esse produto automaticamente: ${e.message}\\n\\n` +
+            'Tente gerar um novo link de afiliada diretamente na página do produto e cole aqui.',
+          Markup.keyboard([[BTN.cancel]]).resize()
+        );
+      }
+    }
+
     if (d.step === 'product_url') {
       await ctx.reply('⏳ Buscando dados do produto…');
 
@@ -1207,6 +1286,21 @@ export function startTelegram({ token, adminId }) {
   bot.action(/^sp:(.+)$/, async (ctx) => {
     const platform = ctx.match[1];
     await ctx.answerCbQuery();
+
+    if (platform === 'mercadolivre') {
+      drafts.set(ctx.from.id, {
+        step: 'meli_affiliate_product_url',
+        mode: 'search',
+        data: { platform: 'mercadolivre' }
+      });
+
+      return ctx.reply(
+        '💛 Cole seu link de afiliada do Mercado Livre.\n\n' +
+          'Pode ser o link curto meli.la ou o link completo gerado pelo Mercado Livre.\n\n' +
+          'Eu vou identificar automaticamente o nome, o preço e a foto do produto — você não precisa escrever esses dados.',
+        Markup.keyboard([[BTN.cancel]]).resize()
+      );
+    }
 
     drafts.set(ctx.from.id, {
       step: 'search_keyword',
