@@ -167,6 +167,19 @@ REGRAS:
   encontrou. Caso contrário use null.
 - Retorne SOMENTE JSON válido, sem markdown e sem explicações.
 
+REGRAS DE PROVA DE VENDA — OBRIGATÓRIAS:
+- Só retorne produtos que tenham evidência real de que JÁ FORAM COMPRADOS.
+- Aceite como evidência:
+  1) quantidade de vendidos/pedidos maior que 0; OU
+  2) quantidade de avaliações/reviews maior que 0.
+- NÃO retorne produto sem nenhuma dessas evidências.
+- NÃO invente quantidade de vendidos, pedidos, avaliações ou reviews.
+- Se a página/snippet não mostrar nenhuma prova de venda, descarte o produto e procure outro.
+- Dê preferência aos que têm mais vendidos/avaliações e boa relação preço x interesse.
+- Para Mercado Livre, priorize anúncios com "vendidos" > 0.
+- Para Shopee, priorize anúncios com "vendidos" > 0 ou avaliações reais > 0.
+- Para SHEIN, como nem sempre há contador de vendas, aceite reviews/avaliações reais > 0 como prova de compra.
+
 Formato exato:
 [
   {
@@ -177,6 +190,9 @@ Formato exato:
     "discountPct": 0,
     "publicLink": "https://...",
     "imageUrl": null,
+    "soldCount": 0,
+    "reviewCount": 0,
+    "salesEvidence": "texto curto explicando a prova de venda encontrada",
     "couponCode": null,
     "couponVerified": false,
     "reason": "motivo curto pelo qual é um bom achado"
@@ -417,6 +433,33 @@ async function pageMetadata(url) {
   }
 }
 
+
+function countNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, value);
+  }
+
+  const s = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(',', '.');
+
+  if (!s) return 0;
+
+  const m = s.match(/([0-9]+(?:\.[0-9]+)?)\s*([km])?/i);
+  if (!m) return 0;
+
+  let n = Number(m[1]);
+  if (!Number.isFinite(n)) return 0;
+
+  const suffix = String(m[2] || '').toLowerCase();
+  if (suffix === 'k') n *= 1000;
+  if (suffix === 'm') n *= 1000000;
+
+  return Math.floor(n);
+}
+
 async function enrich(row) {
   const publicLink = String(
     row.publicLink ||
@@ -489,6 +532,25 @@ async function enrich(row) {
         : 0
     );
 
+  const soldCount = Math.max(
+    countNumber(apiProduct?.sales),
+    countNumber(row.soldCount),
+    countNumber(row.orders),
+    countNumber(row.sales)
+  );
+
+  const reviewCount = Math.max(
+    countNumber(apiProduct?.reviewCount),
+    countNumber(row.reviewCount),
+    countNumber(row.reviews),
+    countNumber(row.ratingsCount)
+  );
+
+  // Regra dura: sem qualquer prova de venda, a Auri descarta.
+  if (soldCount <= 0 && reviewCount <= 0) {
+    return null;
+  }
+
   return {
     platform,
     itemId:
@@ -526,8 +588,16 @@ async function enrich(row) {
     affiliateLink: null,
     rating:
       Number(apiProduct?.rating || 0),
-    sales:
-      Number(apiProduct?.sales || 0),
+    sales: soldCount,
+    reviewCount,
+    salesVerified: true,
+    salesEvidence:
+      String(row.salesEvidence || '').trim() ||
+      (
+        soldCount > 0
+          ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos`
+          : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews`
+      ),
     score:
       Math.max(
         50,
@@ -597,12 +667,18 @@ export async function discoverWebOffers({
     products.push(product);
   }
 
+  products.sort(
+    (a, b) =>
+      (Number(b.sales || 0) * 10 + Number(b.reviewCount || 0)) -
+      (Number(a.sales || 0) * 10 + Number(a.reviewCount || 0))
+  );
+
   const suggestions = [];
 
   for (const product of products) {
     const copy = await generateOfferCopy(
       product,
-      `Encontrado automaticamente pela pesquisa web da Auri. Temas: ${categories.join(', ')}. O link atual é público; antes de ir para a fila a usuária fornecerá o link de afiliada.`
+      `Encontrado automaticamente pela pesquisa web da Auri. Temas: ${categories.join(', ')}. Produto com prova de venda: ${product.salesEvidence}. O link atual é público; antes de ir para a fila a usuária fornecerá o link de afiliada.`
     );
 
     suggestions.push({
