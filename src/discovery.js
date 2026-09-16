@@ -119,22 +119,24 @@ function parseArray(text) {
 }
 
 async function webSearchProducts(categories) {
-  const key = process.env.OPENAI_API_KEY;
+  const key = process.env.GEMINI_API_KEY;
 
   if (!key) {
     throw new Error(
-      'OPENAI_API_KEY não configurada no Railway.'
+      'GEMINI_API_KEY não configurada no Railway.'
     );
   }
 
   const model =
-    process.env.OPENAI_WEB_SEARCH_MODEL ||
-    'gpt-5.6-luna';
+    process.env.GEMINI_SEARCH_MODEL ||
+    'gemini-2.5-flash';
 
   const amount = config.discoveryMaxPerRun;
 
   const prompt = `
-Pesquise AGORA produtos reais à venda no Brasil em:
+Pesquise AGORA na web, usando a Pesquisa Google, produtos reais
+que estejam à venda no Brasil nestes marketplaces:
+
 - Shopee Brasil
 - SHEIN Brasil
 - Mercado Livre Brasil
@@ -142,56 +144,67 @@ Pesquise AGORA produtos reais à venda no Brasil em:
 Temas desta rodada:
 ${categories.map((x) => `- ${x}`).join('\n')}
 
-Quero ${amount} PRODUTOS DIFERENTES e atuais.
+Quero até ${amount} PRODUTOS DIFERENTES e atuais.
 
 OBJETIVO:
 Montar sugestões para um grupo brasileiro de achadinhos.
-Inclua qualquer tipo de produto permitido, inclusive alimentos,
-bebidas, limpeza, casa, organização, beleza, moda, tecnologia,
-pet, infantil, automotivo, papelaria, cozinha, fitness, viagem,
-utilidades, presentes e itens sazonais.
+Pode incluir alimentos, bebidas, supermercado, limpeza, casa,
+decoração, cozinha, organização, beleza, moda, tecnologia, pet,
+infantil, automotivo, papelaria, fitness, viagem, presentes,
+utilidades e itens sazonais.
 
-REGRAS:
-- Pesquise de verdade na web; não use apenas conhecimento interno.
-- Misture os 3 marketplaces quando houver bons resultados.
-- Retorne SOMENTE páginas DIRETAS de produto.
-- NÃO retorne página de busca, categoria, vitrine, loja, home ou coleção.
-- O link deve ser o URL público EXATO daquele produto.
-- NÃO invente URL e NÃO monte URL a partir do nome do produto.
-- NÃO invente link de afiliado.
-- O link precisa existir na fonte encontrada e apontar para o mesmo produto descrito.
-- Priorize preço interessante, promoção real, produto útil,
-  popular, curioso ou com boa relação custo-benefício.
-- Não repita o mesmo produto.
-- Só informe preço, preço anterior, desconto, vendidos, avaliações
-  ou cupom quando isso estiver confirmado na fonte atual.
-- Nunca invente cupom, preço, desconto, quantidade vendida,
-  avaliação, característica ou benefício.
-- Se não conseguir confirmar um dado, use 0 ou null.
-- Para imageUrl, use URL de imagem somente se você realmente a
-  encontrou. Caso contrário use null.
-- O JSON serve apenas como CANDIDATO: o sistema ainda vai abrir
-  o link e validar tudo antes de aceitar o produto.
-- Retorne SOMENTE JSON válido, sem markdown e sem explicações.
+DISTRIBUIÇÃO:
+- Misture Shopee, SHEIN e Mercado Livre.
+- Quando houver resultados válidos, tente trazer pelo menos
+  1 produto de cada marketplace nesta rodada.
+- Não concentre todos os produtos no mesmo nicho.
 
-REGRAS DE PROVA DE VENDA — OBRIGATÓRIAS:
-- Só retorne produtos que tenham evidência real de que JÁ FORAM COMPRADOS.
-- Aceite como evidência:
-  1) quantidade de vendidos/pedidos maior que 0; OU
-  2) quantidade de avaliações/reviews maior que 0.
-- NÃO retorne produto sem nenhuma dessas evidências.
-- NÃO invente quantidade de vendidos, pedidos, avaliações ou reviews.
-- Se a página/snippet não mostrar nenhuma prova de venda, descarte o produto e procure outro.
-- Dê preferência aos que têm mais vendidos/avaliações e boa relação preço x interesse.
-- Para Mercado Livre, priorize anúncios com "vendidos" > 0.
-- Para Shopee, priorize anúncios com "vendidos" > 0 ou avaliações reais > 0.
-- Para SHEIN, como nem sempre há contador de vendas, aceite reviews/avaliações reais > 0 como prova de compra.
+REGRAS DO LINK — OBRIGATÓRIAS:
+- Retorne SOMENTE página DIRETA de um produto específico.
+- NÃO retorne busca, categoria, vitrine, loja, coleção ou home.
+- Use o URL público EXATO que apareceu no resultado da pesquisa.
+- NÃO invente URL.
+- NÃO monte URL a partir do nome.
+- NÃO encurte nem altere o link.
+- NÃO gere link de afiliado.
+- O produto descrito precisa ser exatamente o produto do link.
 
-Formato exato:
+REGRAS DE VERACIDADE:
+- A pesquisa é para descobrir CANDIDATOS. O sistema vai abrir
+  e validar cada página depois.
+- NÃO invente preço.
+- NÃO invente preço anterior.
+- NÃO invente desconto.
+- NÃO invente cupom.
+- NÃO invente vendidos/pedidos.
+- NÃO invente avaliações/reviews.
+- NÃO invente material, tamanho, variação ou benefício.
+- Se um dado não estiver claramente visível/confirmável,
+  retorne 0 ou null.
+
+PROVA DE VENDA — OBRIGATÓRIA:
+Só retorne produtos que tenham indício público de que já foram
+comprados.
+
+Aceite como candidato quando a pesquisa mostrar:
+1) vendidos/pedidos maior que 0; OU
+2) avaliações/reviews maior que 0.
+
+Preferências:
+- Mercado Livre: priorize anúncios com vendidos > 0.
+- Shopee: priorize vendidos > 0 ou avaliações > 0.
+- SHEIN: avaliações/reviews > 0 podem servir como prova,
+  pois o contador de vendas nem sempre é exibido.
+
+Se não houver nenhuma prova de compra, descarte e procure outro.
+
+Retorne SOMENTE JSON válido, sem markdown e sem explicações.
+
+Formato:
 [
   {
     "platform": "shopee|shein|mercadolivre",
-    "name": "nome real do produto",
+    "name": "nome exato do produto",
     "price": 0,
     "originalPrice": 0,
     "discountPct": 0,
@@ -199,68 +212,75 @@ Formato exato:
     "imageUrl": null,
     "soldCount": 0,
     "reviewCount": 0,
-    "salesEvidence": "texto curto explicando a prova de venda encontrada",
+    "salesEvidence": "prova de compra encontrada na pesquisa",
     "couponCode": null,
     "couponVerified": false,
-    "reason": "motivo curto pelo qual é um bom achado"
+    "reason": "motivo factual e curto"
   }
 ]
 `;
 
-  const res = await fetch(
-    'https://api.openai.com/v1/responses',
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        reasoning: { effort: 'none' },
-        tools: [
-          {
-            type: 'web_search',
-            search_context_size: 'low',
-            filters: {
-              allowed_domains: MARKETPLACE_DOMAINS
-            }
-          }
-        ],
-        input: prompt,
-        max_output_tokens: 2600
-      })
-    }
-  );
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: prompt }
+          ]
+        }
+      ],
+      tools: [
+        {
+          google_search: {}
+        }
+      ],
+      generationConfig: {
+        temperature: 0.15,
+        maxOutputTokens: 2600
+      }
+    })
+  });
 
   const json = await res.json();
 
   if (!res.ok) {
     const raw =
       json?.error?.message ||
-      `OpenAI Web Search HTTP ${res.status}`;
+      `Gemini Search HTTP ${res.status}`;
 
     if (
       res.status === 429 ||
-      /rate limit|tokens per min|tpm/i.test(raw)
+      /quota|rate limit|resource exhausted/i.test(raw)
     ) {
       throw new Error(
-        'A pesquisa atingiu o limite temporário da API da OpenAI. ' +
-        'A Auri foi ajustada para pesquisar em lotes menores. ' +
-        'Se a conta da API estiver sem faturamento ativo, pode ser necessário ' +
-        'adicionar créditos/método de pagamento na OpenAI Platform ou aguardar ' +
-        'o prazo de liberação mostrado pela própria API.'
+        'A pesquisa atingiu o limite temporário do Gemini. ' +
+        'Aguarde a cota liberar e tente novamente. ' +
+        'A Auri continua configurada para pesquisar em lotes pequenos.'
       );
     }
 
     throw new Error(raw);
   }
 
-  const rows = parseArray(extractOutputText(json));
+  const text = String(
+    json?.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text || '')
+      .join('\n') || ''
+  ).trim();
+
+  const rows = parseArray(text);
 
   if (!rows.length) {
     throw new Error(
-      'A pesquisa web não retornou produtos estruturados nesta rodada.'
+      'O Gemini pesquisou, mas não retornou produtos estruturados nesta rodada.'
     );
   }
 

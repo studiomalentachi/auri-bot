@@ -2,8 +2,16 @@ import { readStore } from './store.js';
 
 function providerOrder() {
   const chosen = readStore().aiProvider || process.env.AI_PROVIDER || 'auto';
-  if (chosen !== 'auto') return [chosen];
-  return ['openai', 'gemini', 'anthropic'];
+
+  if (chosen !== 'auto') {
+    return [chosen];
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    return ['gemini', 'openai', 'anthropic'];
+  }
+
+  return ['openai', 'anthropic'];
 }
 
 export function availableAIProviders() {
