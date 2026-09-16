@@ -27,7 +27,7 @@ const BTN = {
   sendNow: '▶️ Enviar agora',
   ai: '🧠 IA',
   discovery: '🤖 Auto busca',
-  suggestions: '💡 Sugestões',
+  suggestions: '📥 Caixa de aprovação',
   results: '📈 Resultados',
   pause: '⏸️ Pausar envios',
   resume: '▶️ Retomar envios',
@@ -475,78 +475,289 @@ async function beginSearch(ctx) {
   );
 }
 
-async function showSuggestions(ctx, page = 0) {
-  const s = readStore();
-  const suggestions = s.suggestions || [];
+function marketplaceLabel(platform) {
+  const p = String(platform || '').toLowerCase();
 
-  if (!suggestions.length) {
+  if (p === 'mercadolivre') return '💛 Mercado Livre';
+  if (p === 'shein') return '🖤 SHEIN';
+  if (p === 'shopee') return '🧡 Shopee';
+
+  return '🛍️ Produto';
+}
+
+function moneyBR(value) {
+  const n = Number(value || 0);
+
+  if (!Number.isFinite(n) || n <= 0) {
+    return '';
+  }
+
+  return n.toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  });
+}
+
+function suggestionPublicLink(item) {
+  return (
+    item?.publicLink ||
+    item?.product?.publicLink ||
+    item?.product?.canonicalUrl ||
+    item?.product?.productLink ||
+    item?.link ||
+    ''
+  );
+}
+
+function suggestionPosition(id) {
+  const list = readStore().suggestions || [];
+  const index = list.findIndex(
+    (x) => String(x.id) === String(id)
+  );
+
+  return {
+    index,
+    total: list.length
+  };
+}
+
+function saveSuggestionDraft(d) {
+  if (
+    !d ||
+    !d.data?.suggestionId
+  ) {
+    return;
+  }
+
+  updateStore((s) => {
+    const index = (s.suggestions || []).findIndex(
+      (x) =>
+        String(x.id) ===
+        String(d.data.suggestionId)
+    );
+
+    if (index >= 0) {
+      s.suggestions[index] = {
+        ...s.suggestions[index],
+        text: d.data.text,
+        photoPath:
+          d.data.photoPath || null,
+        product: {
+          ...(s.suggestions[index].product || {}),
+          ...(d.data.product || {})
+        }
+      };
+    }
+
+    return s;
+  });
+}
+
+async function renderApprovalCard(ctx, item) {
+  if (!item) {
     return ctx.reply(
-      '💡 Ainda não há sugestões. Ligue a Auto busca ou toque em “🔎 Buscar agora”.',
+      '📥 A caixa de aprovação está vazia.',
       mainMenu()
     );
   }
 
-  const perPage = 10;
-  const pages = Math.max(
-    1,
-    Math.ceil(
-      suggestions.length / perPage
-    )
-  );
+  const product = item.product || {};
+  const publicLink =
+    suggestionPublicLink(item);
 
-  page = Math.max(
+  const id =
+    String(
+      item.id ||
+      crypto.randomBytes(4).toString('hex')
+    );
+
+  const data = {
+    ...item,
+    id,
+    suggestionId:
+      item.suggestionId ||
+      id,
+    publicLink,
+    link:
+      item.product?.affiliateLink ||
+      '',
+    product: {
+      ...product
+    }
+  };
+
+  const d = {
+    step: 'suggestion_review',
+    mode: 'suggestion-review',
+    data
+  };
+
+  drafts.set(ctx.from.id, d);
+
+  if (
+    data.photoPath &&
+    fs.existsSync(data.photoPath)
+  ) {
+    try {
+      await ctx.replyWithPhoto({
+        source: data.photoPath
+      });
+    } catch {}
+  } else if (product.imageUrl) {
+    try {
+      await ctx.replyWithPhoto(
+        product.imageUrl
+      );
+    } catch {}
+  }
+
+  const current =
+    suggestionPosition(id);
+
+  const price = moneyBR(product.price);
+  const oldPrice =
+    moneyBR(product.originalPrice);
+
+  const discount =
+    Number(product.discountPct || 0);
+
+  const sales =
+    Number(product.sales || 0);
+
+  const reviews =
+    Number(product.reviewCount || 0);
+
+  const rating =
+    Number(product.rating || 0);
+
+  const facts = [];
+
+  if (
+    oldPrice &&
+    price &&
+    Number(product.originalPrice) >
+      Number(product.price)
+  ) {
+    facts.push(
+      `💰 De ${oldPrice} por ${price}`
+    );
+  } else if (price) {
+    facts.push(`💰 ${price}`);
+  }
+
+  if (discount > 0) {
+    facts.push(
+      `🔥 ${Math.round(discount)}% de desconto`
+    );
+  }
+
+  if (sales > 0) {
+    facts.push(
+      `🛒 ${sales.toLocaleString('pt-BR')} vendidos/pedidos confirmados`
+    );
+  }
+
+  if (reviews > 0) {
+    facts.push(
+      `💬 ${reviews.toLocaleString('pt-BR')} avaliações/reviews confirmados`
+    );
+  }
+
+  if (rating > 0) {
+    facts.push(
+      `⭐ ${rating.toFixed(1).replace('.', ',')}`
+    );
+  }
+
+  const rows = [];
+
+  if (publicLink) {
+    rows.push([
+      Markup.button.url(
+        '🔎 Abrir produto',
+        publicLink
+      )
+    ]);
+  }
+
+  rows.push([
+    Markup.button.callback(
+      '🔗 Colocar meu link de afiliada',
+      `aff:${id}`
+    )
+  ]);
+
+  rows.push([
+    Markup.button.callback(
+      '✏️ Editar texto',
+      `edit:${id}`
+    ),
+    Markup.button.callback(
+      '📸 Trocar foto',
+      `photoedit:${id}`
+    )
+  ]);
+
+  rows.push([
+    Markup.button.callback(
+      '✨ Outro texto',
+      `regen:${id}`
+    ),
+    Markup.button.callback(
+      '❌ Ignorar',
+      `ignore:${id}`
+    )
+  ]);
+
+  if (current.total > 1) {
+    rows.push([
+      Markup.button.callback(
+        '➡️ Próxima sugestão',
+        `sugnext:${id}`
+      )
+    ]);
+  }
+
+  const numberText =
+    current.index >= 0
+      ? `📥 ${current.index + 1} de ${current.total}`
+      : `📥 Caixa de aprovação`;
+
+  await ctx.reply(
+    `${numberText}\n\n` +
+      `${marketplaceLabel(product.platform)}\n` +
+      `📦 ${product.name || 'Produto'}\n` +
+      `${facts.length ? `\n${facts.join('\n')}\n` : ''}` +
+      `\n✍️ TEXTO PRONTO\n\n${data.text || ''}\n\n` +
+      `🔗 Link público confirmado:\n${publicLink || 'não disponível'}\n\n` +
+      `⏳ Link de afiliada: ainda não colocado`,
+    Markup.inlineKeyboard(rows)
+  );
+}
+
+async function showSuggestions(ctx, page = 0) {
+  const suggestions =
+    readStore().suggestions || [];
+
+  if (!suggestions.length) {
+    return ctx.reply(
+      '📥 A caixa de aprovação está vazia.\n\n' +
+        'Ligue a Auto busca ou toque em “🔎 Buscar agora” para a Auri pesquisar novos produtos.',
+      mainMenu()
+    );
+  }
+
+  const index = Math.max(
     0,
     Math.min(
-      pages - 1,
+      suggestions.length - 1,
       Number(page) || 0
     )
   );
 
-  const slice = suggestions.slice(
-    page * perPage,
-    (page + 1) * perPage
-  );
-
-  const rows = slice.map((x) => [
-    Markup.button.callback(
-      `${x.product?.platform === 'mercadolivre' ? '💛' : x.product?.platform === 'shein' ? '🖤' : '🧡'} ${x.product?.name?.slice(0, 43) || 'Oferta'}`,
-      `sug:${x.id}`
-    )
-  ]);
-
-  const nav = [];
-
-  if (page > 0) {
-    nav.push(
-      Markup.button.callback(
-        '⬅️',
-        `sugpage:${page - 1}`
-      )
-    );
-  }
-
-  nav.push(
-    Markup.button.callback(
-      `${page + 1}/${pages}`,
-      'noop'
-    )
-  );
-
-  if (page < pages - 1) {
-    nav.push(
-      Markup.button.callback(
-        '➡️',
-        `sugpage:${page + 1}`
-      )
-    );
-  }
-
-  rows.push(nav);
-
-  await ctx.reply(
-    `💡 Sugestões da Auri: ${suggestions.length}\n\n` +
-      'Ela já pesquisou e escreveu a oferta. Toque em uma para ver foto, link público e enviar apenas o seu link de afiliada.',
-    Markup.inlineKeyboard(rows)
+  return renderApprovalCard(
+    ctx,
+    suggestions[index]
   );
 }
 
@@ -781,13 +992,28 @@ export function startTelegram({ token, adminId }) {
           ctx.message.photo.at(-1).file_id
         );
 
-        d.step = 'confirm';
+        const waitingAffiliate =
+          d.mode === 'suggestion-review' &&
+          !d.data.product?.affiliateLink;
+
+        d.step = waitingAffiliate
+          ? 'suggestion_review'
+          : 'confirm';
+
         drafts.set(ctx.from.id, d);
+        saveSuggestionDraft(d);
 
         await ctx.reply(
-          '✅ Foto atualizada. Confira a prévia:',
+          '✅ Foto atualizada.',
           Markup.removeKeyboard()
         );
+
+        if (waitingAffiliate) {
+          return renderApprovalCard(
+            ctx,
+            d.data
+          );
+        }
 
         return previewOffer(ctx, d);
       } catch (e) {
@@ -1241,13 +1467,29 @@ export function startTelegram({ token, adminId }) {
       text.toLowerCase() === 'usar foto automática'
     ) {
       d.data.photoPath = null;
-      d.step = 'confirm';
+
+      const waitingAffiliate =
+        d.mode === 'suggestion-review' &&
+        !d.data.product?.affiliateLink;
+
+      d.step = waitingAffiliate
+        ? 'suggestion_review'
+        : 'confirm';
+
       drafts.set(ctx.from.id, d);
+      saveSuggestionDraft(d);
 
       await ctx.reply(
         '✅ Vou usar a foto automática do produto.',
         Markup.removeKeyboard()
       );
+
+      if (waitingAffiliate) {
+        return renderApprovalCard(
+          ctx,
+          d.data
+        );
+      }
 
       return previewOffer(ctx, d);
     }
@@ -1265,13 +1507,28 @@ export function startTelegram({ token, adminId }) {
         };
       }
 
-      d.step = 'confirm';
+      const waitingAffiliate =
+        d.mode === 'suggestion-review' &&
+        !d.data.product?.affiliateLink;
+
+      d.step = waitingAffiliate
+        ? 'suggestion_review'
+        : 'confirm';
+
       drafts.set(ctx.from.id, d);
+      saveSuggestionDraft(d);
 
       await ctx.reply(
-        '✅ Foto removida. Confira a prévia:',
+        '✅ Foto removida.',
         Markup.removeKeyboard()
       );
+
+      if (waitingAffiliate) {
+        return renderApprovalCard(
+          ctx,
+          d.data
+        );
+      }
 
       return previewOffer(ctx, d);
     }
@@ -1288,14 +1545,29 @@ export function startTelegram({ token, adminId }) {
       d.data.text = edited;
       d.data.aiGenerated = false;
       d.data.manuallyEdited = true;
-      d.step = 'confirm';
+
+      const waitingAffiliate =
+        d.mode === 'suggestion-review' &&
+        !d.data.product?.affiliateLink;
+
+      d.step = waitingAffiliate
+        ? 'suggestion_review'
+        : 'confirm';
 
       drafts.set(ctx.from.id, d);
+      saveSuggestionDraft(d);
 
       await ctx.reply(
-        '✅ Texto atualizado. Confira a prévia:',
+        '✅ Texto atualizado.',
         Markup.removeKeyboard()
       );
+
+      if (waitingAffiliate) {
+        return renderApprovalCard(
+          ctx,
+          d.data
+        );
+      }
 
       return previewOffer(ctx, d);
     }
@@ -1310,7 +1582,7 @@ export function startTelegram({ token, adminId }) {
         );
       }
 
-      const item = d.data.item;
+      const item = d.data;
       const platform =
         item?.product?.platform || '';
 
@@ -1450,6 +1722,104 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^aff:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = String(ctx.match[1]);
+
+    if (
+      !d ||
+      String(d.data.id) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    d.step = 'suggestion_affiliate_link';
+    drafts.set(ctx.from.id, d);
+
+    await ctx.answerCbQuery(
+      'Enviar link'
+    );
+
+    return ctx.reply(
+      '🔗 Agora cole o SEU link de afiliada deste mesmo produto.\n\n' +
+        'A Auri não vai trocar os dados do produto; ela só vai substituir o link público pelo seu link de afiliada e mostrar a prévia final.',
+      Markup.keyboard([[BTN.cancel]]).resize()
+    );
+  });
+
+  bot.action(/^ignore:(.+)$/, async (ctx) => {
+    const id = String(ctx.match[1]);
+
+    updateStore((s) => {
+      s.suggestions = (s.suggestions || []).filter(
+        (x) => String(x.id) !== id
+      );
+      return s;
+    });
+
+    drafts.delete(ctx.from.id);
+
+    await ctx.answerCbQuery(
+      'Ignorada'
+    );
+
+    try {
+      await ctx.editMessageText(
+        '❌ Sugestão ignorada.'
+      );
+    } catch {}
+
+    const next =
+      (readStore().suggestions || [])[0];
+
+    if (next) {
+      await ctx.reply(
+        '➡️ Próxima da caixa:'
+      );
+      return renderApprovalCard(
+        ctx,
+        next
+      );
+    }
+
+    return ctx.reply(
+      '📥 Caixa de aprovação vazia.',
+      mainMenu()
+    );
+  });
+
+  bot.action(/^sugnext:(.+)$/, async (ctx) => {
+    const id = String(ctx.match[1]);
+    const list =
+      readStore().suggestions || [];
+
+    if (!list.length) {
+      return ctx.answerCbQuery(
+        'Caixa vazia.'
+      );
+    }
+
+    const index = list.findIndex(
+      (x) => String(x.id) === id
+    );
+
+    const nextIndex =
+      index >= 0
+        ? (index + 1) % list.length
+        : 0;
+
+    await ctx.answerCbQuery(
+      'Próxima'
+    );
+
+    return renderApprovalCard(
+      ctx,
+      list[nextIndex]
+    );
+  });
+
   bot.action(/^photoedit:(.+)$/, async (ctx) => {
     const d = drafts.get(ctx.from.id);
     const id = ctx.match[1];
@@ -1575,6 +1945,23 @@ export function startTelegram({ token, adminId }) {
 
     d.data.text = copy.text;
     d.data.aiProvider = copy.provider;
+    d.data.aiGenerated = true;
+
+    saveSuggestionDraft(d);
+
+    const waitingAffiliate =
+      d.mode === 'suggestion-review' &&
+      !d.data.product?.affiliateLink;
+
+    if (waitingAffiliate) {
+      d.step = 'suggestion_review';
+      drafts.set(ctx.from.id, d);
+
+      return renderApprovalCard(
+        ctx,
+        d.data
+      );
+    }
 
     return previewOffer(ctx, d);
   });
@@ -1855,9 +2242,9 @@ export function startTelegram({ token, adminId }) {
         (x) => String(x.id) === id
       );
 
-    // Compatibilidade com sugestões antigas por índice.
     if (!item && /^\d+$/.test(id)) {
-      item = s.suggestions[Number(id)];
+      item =
+        s.suggestions[Number(id)];
     }
 
     if (!item) {
@@ -1870,44 +2257,9 @@ export function startTelegram({ token, adminId }) {
       'Abrindo…'
     );
 
-    if (item.product?.imageUrl) {
-      try {
-        await ctx.replyWithPhoto(
-          item.product.imageUrl
-        );
-      } catch {}
-    }
-
-    const price =
-      Number(item.product?.price || 0);
-
-    const priceLine =
-      price > 0
-        ? `\n💰 ${price.toLocaleString('pt-BR', {
-            style: 'currency',
-            currency: 'BRL'
-          })}`
-        : '';
-
-    const publicLink =
-      item.publicLink ||
-      item.product?.publicLink ||
-      item.product?.canonicalUrl ||
-      item.link;
-
-    drafts.set(ctx.from.id, {
-      step: 'suggestion_affiliate_link',
-      mode: 'suggestion',
-      data: { item }
-    });
-
-    return ctx.reply(
-      `🛍️ ${item.product?.name || 'Produto'}${priceLine}\n\n` +
-        `${item.text}\n\n` +
-        `🔎 Link público:\n${publicLink}\n\n` +
-        `Agora só falta uma coisa: envie o SEU link de afiliada deste mesmo produto.\n\n` +
-        `Depois eu te mostro a prévia final para você tocar em ✅ Salvar na fila.`,
-      Markup.keyboard([[BTN.cancel]]).resize()
+    return renderApprovalCard(
+      ctx,
+      item
     );
   });
 
