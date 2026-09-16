@@ -154,17 +154,24 @@ utilidades, presentes e itens sazonais.
 REGRAS:
 - Pesquise de verdade na web; não use apenas conhecimento interno.
 - Misture os 3 marketplaces quando houver bons resultados.
-- Dê preferência a páginas de PRODUTO, não páginas de categoria.
-- O link deve ser público/normal. NÃO invente link de afiliado.
+- Retorne SOMENTE páginas DIRETAS de produto.
+- NÃO retorne página de busca, categoria, vitrine, loja, home ou coleção.
+- O link deve ser o URL público EXATO daquele produto.
+- NÃO invente URL e NÃO monte URL a partir do nome do produto.
+- NÃO invente link de afiliado.
+- O link precisa existir na fonte encontrada e apontar para o mesmo produto descrito.
 - Priorize preço interessante, promoção real, produto útil,
   popular, curioso ou com boa relação custo-benefício.
 - Não repita o mesmo produto.
-- Só informe preço, preço anterior, desconto ou cupom se estiver
-  confirmado na fonte atual.
-- Nunca invente cupom.
+- Só informe preço, preço anterior, desconto, vendidos, avaliações
+  ou cupom quando isso estiver confirmado na fonte atual.
+- Nunca invente cupom, preço, desconto, quantidade vendida,
+  avaliação, característica ou benefício.
 - Se não conseguir confirmar um dado, use 0 ou null.
 - Para imageUrl, use URL de imagem somente se você realmente a
   encontrou. Caso contrário use null.
+- O JSON serve apenas como CANDIDATO: o sistema ainda vai abrir
+  o link e validar tudo antes de aceitar o produto.
 - Retorne SOMENTE JSON válido, sem markdown e sem explicações.
 
 REGRAS DE PROVA DE VENDA — OBRIGATÓRIAS:
@@ -269,7 +276,123 @@ function decodeHtml(value) {
     .replace(/&gt;/gi, '>');
 }
 
-async function pageMetadata(url) {
+
+function isDirectProductUrl(platform, url) {
+  const s = String(url || '').toLowerCase();
+
+  if (platform === 'mercadolivre') {
+    return (
+      /mercadolivre\.com\.br\/.+\/p\/mlb\d+/i.test(s) ||
+      /produto\.mercadolivre\.com\.br\/mlb-?\d+/i.test(s) ||
+      /mercadolivre\.com\.br\/mlb-?\d+/i.test(s)
+    );
+  }
+
+  if (platform === 'shopee') {
+    return (
+      /shopee\.com\.br\/.+-i\.\d+\.\d+/i.test(s) ||
+      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s)
+    );
+  }
+
+  if (platform === 'shein') {
+    return (
+      /shein\.com(?:\.br)?\/.+-p-\d+\.html/i.test(s) ||
+      /shein\.com(?:\.br)?\/.+-p-\d+/i.test(s)
+    );
+  }
+
+  return false;
+}
+
+function firstCount(text, patterns) {
+  const src = String(text || '');
+
+  for (const pattern of patterns) {
+    const m = src.match(pattern);
+    if (!m) continue;
+
+    const raw = String(m[1] || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\./g, '')
+      .replace(',', '.');
+
+    const n = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*([km])?/i);
+    if (!n) continue;
+
+    let value = Number(n[1]);
+    if (!Number.isFinite(value)) continue;
+
+    const suffix = String(n[2] || '').toLowerCase();
+    if (suffix === 'k') value *= 1000;
+    if (suffix === 'm') value *= 1000000;
+
+    value = Math.floor(value);
+    if (value > 0) return value;
+  }
+
+  return 0;
+}
+
+function extractSalesEvidenceFromHtml(platform, html) {
+  const s = decodeHtml(html);
+
+  let soldCount = 0;
+  let reviewCount = 0;
+
+  if (platform === 'mercadolivre') {
+    soldCount = firstCount(s, [
+      /"sold_quantity"\s*:\s*([0-9]+)/i,
+      /([0-9.,]+\s*[km]?)\s+vendidos/i,
+      /([0-9.,]+\s*[km]?)\s+vendido/i
+    ]);
+
+    reviewCount = firstCount(s, [
+      /"reviews_count"\s*:\s*([0-9]+)/i,
+      /"rating_count"\s*:\s*([0-9]+)/i,
+      /([0-9.,]+\s*[km]?)\s+avalia[cç][oõ]es/i
+    ]);
+  }
+
+  if (platform === 'shopee') {
+    soldCount = firstCount(s, [
+      /"historical_sold"\s*:\s*([0-9]+)/i,
+      /"sold"\s*:\s*([0-9]+)/i,
+      /([0-9.,]+\s*[km]?)\s+vendidos/i,
+      /([0-9.,]+\s*[km]?)\s+vendido/i
+    ]);
+
+    reviewCount = firstCount(s, [
+      /"rating_total"\s*:\s*([0-9]+)/i,
+      /"rating_count"\s*:\s*([0-9]+)/i,
+      /"item_rating"\s*:\s*\{[\s\S]{0,300}?"rating_count"\s*:\s*\[?([0-9]+)/i,
+      /([0-9.,]+\s*[km]?)\s+avalia[cç][oõ]es/i
+    ]);
+  }
+
+  if (platform === 'shein') {
+    soldCount = firstCount(s, [
+      /"sale_count"\s*:\s*"?([0-9]+)"?/i,
+      /"sales_count"\s*:\s*"?([0-9]+)"?/i,
+      /"sold_count"\s*:\s*"?([0-9]+)"?/i
+    ]);
+
+    reviewCount = firstCount(s, [
+      /"comment_num"\s*:\s*"?([0-9]+)"?/i,
+      /"review_count"\s*:\s*"?([0-9]+)"?/i,
+      /"reviews_count"\s*:\s*"?([0-9]+)"?/i,
+      /"comment_count"\s*:\s*"?([0-9]+)"?/i
+    ]);
+  }
+
+  return {
+    soldCount,
+    reviewCount
+  };
+}
+
+async function pageMetadata(url, platform) {
   if (!/^https?:\/\//i.test(String(url || ''))) {
     return {};
   }
@@ -419,14 +542,24 @@ async function pageMetadata(url) {
       } catch {}
     }
 
+    const finalUrl = res.url || url;
+    const evidence = extractSalesEvidenceFromHtml(
+      platform,
+      normalized
+    );
+
     return {
-      finalUrl: res.url || url,
+      finalUrl,
+      directProduct:
+        isDirectProductUrl(platform, finalUrl),
       name,
       imageUrl,
       price:
         Number.isFinite(price) && price > 0
           ? price
-          : 0
+          : 0,
+      soldCount: evidence.soldCount,
+      reviewCount: evidence.reviewCount
     };
   } catch {
     return {};
@@ -487,7 +620,7 @@ async function enrich(row) {
     apiProduct = await importProductFromUrl(publicLink);
   } catch {}
 
-  const meta = await pageMetadata(publicLink);
+  const meta = await pageMetadata(publicLink, platform);
 
   const rowName = String(row.name || '').trim();
   const apiName = String(
@@ -501,28 +634,26 @@ async function enrich(row) {
         ? apiName
         : ''
     ) ||
-    rowName ||
     meta.name ||
+    rowName ||
     '';
 
   if (!name) {
     return null;
   }
 
+  // Preço só entra se a API/página confirmou.
   const price =
     Number(apiProduct?.price || 0) ||
-    Number(row.price || 0) ||
     Number(meta.price || 0) ||
     0;
 
   const originalPrice =
     Number(apiProduct?.originalPrice || 0) ||
-    Number(row.originalPrice || 0) ||
     0;
 
   const discountPct =
     Number(apiProduct?.discountPct || 0) ||
-    Number(row.discountPct || 0) ||
     (
       originalPrice > price && price > 0
         ? (
@@ -532,21 +663,24 @@ async function enrich(row) {
         : 0
     );
 
+  // O resultado da IA é apenas candidato.
+  // Vendas/avaliações só valem se vierem da API ou da página aberta.
   const soldCount = Math.max(
     countNumber(apiProduct?.sales),
-    countNumber(row.soldCount),
-    countNumber(row.orders),
-    countNumber(row.sales)
+    countNumber(meta.soldCount)
   );
 
   const reviewCount = Math.max(
     countNumber(apiProduct?.reviewCount),
-    countNumber(row.reviewCount),
-    countNumber(row.reviews),
-    countNumber(row.ratingsCount)
+    countNumber(meta.reviewCount)
   );
 
-  // Regra dura: sem qualquer prova de venda, a Auri descarta.
+  // O redirect precisa terminar numa página direta de produto.
+  if (!meta.directProduct) {
+    return null;
+  }
+
+  // Regra dura: sem qualquer prova CONFIRMADA de venda, descarta.
   if (soldCount <= 0 && reviewCount <= 0) {
     return null;
   }
@@ -562,7 +696,6 @@ async function enrich(row) {
     name,
     imageUrl:
       apiProduct?.imageUrl ||
-      row.imageUrl ||
       meta.imageUrl ||
       null,
     price,
@@ -572,19 +705,19 @@ async function enrich(row) {
         : 0,
     discountPct,
     couponCode:
-      row.couponVerified && row.couponCode
-        ? String(row.couponCode)
+      apiProduct?.couponVerified && apiProduct?.couponCode
+        ? String(apiProduct.couponCode)
         : null,
     couponVerified:
       Boolean(
-        row.couponVerified &&
-        row.couponCode
+        apiProduct?.couponVerified &&
+        apiProduct?.couponCode
       ),
     canonicalUrl:
       apiProduct?.canonicalUrl ||
-      meta.finalUrl ||
-      publicLink,
-    publicLink,
+      meta.finalUrl,
+    publicLink:
+      meta.finalUrl,
     affiliateLink: null,
     rating:
       Number(apiProduct?.rating || 0),
@@ -592,19 +725,18 @@ async function enrich(row) {
     reviewCount,
     salesVerified: true,
     salesEvidence:
-      String(row.salesEvidence || '').trim() ||
-      (
-        soldCount > 0
-          ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos`
-          : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews`
-      ),
+      soldCount > 0
+        ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos confirmados`
+        : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews confirmados`,
     score:
       Math.max(
         50,
         Number(apiProduct?.score || 0)
       ),
     webReason:
-      String(row.reason || '').trim(),
+      soldCount > 0
+        ? `Já teve ${soldCount.toLocaleString('pt-BR')} vendas/pedidos confirmados.`
+        : `Já tem ${reviewCount.toLocaleString('pt-BR')} avaliações/reviews confirmados.`,
     needsAffiliateLink: true
   };
 }
