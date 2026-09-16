@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { Telegraf, Markup } from 'telegraf';
 import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
-import { discoverWebOffers } from './discovery.js';
+import { discoverShopeeOffers } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
 import { getShopeeConversions, isShopeeConfigured } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
@@ -71,7 +71,7 @@ function statusText() {
     `Grupos: ${s.targetGroups?.length || 0}\n` +
     `Fila: ${s.queue.length}\n` +
     `Automação: ${s.paused ? '⏸️ pausada' : '✅ ativa'}\n` +
-    `Horário: 08:00–22:00 | ${config.sendIntervalMinutes} min | até 85/dia\n` +
+    `Horário: 08:00–22:00 | ${config.sendIntervalMinutes} min\n` +
     `IA escolhida: ${s.aiProvider || 'auto'} | disponíveis: ${aiOn}\n` +
     `Shopee Open API: ${isShopeeConfigured() ? '✅' : '⚠️ não configurada'}\n` +
     `Mercado Livre API: ${meliOAuthStatus().authorized ? '✅ conectada' : (meliOAuthStatus().configured ? '⚠️ falta autorizar (/meli)' : '⚠️ não configurada')}\n` +
@@ -471,77 +471,25 @@ async function beginSearch(ctx) {
   );
 }
 
-async function showSuggestions(ctx, page = 0) {
+async function showSuggestions(ctx) {
   const s = readStore();
-  const suggestions = s.suggestions || [];
 
-  if (!suggestions.length) {
+  if (!s.suggestions.length) {
     return ctx.reply(
-      '💡 Ainda não há sugestões. Ligue a Auto busca ou toque em “🔎 Buscar agora”.',
+      '💡 Ainda não há sugestões. Toque em “🔎 Buscar ofertas” ou ligue a Auto busca.',
       mainMenu()
     );
   }
 
-  const perPage = 10;
-  const pages = Math.max(
-    1,
-    Math.ceil(
-      suggestions.length / perPage
-    )
-  );
-
-  page = Math.max(
-    0,
-    Math.min(
-      pages - 1,
-      Number(page) || 0
-    )
-  );
-
-  const slice = suggestions.slice(
-    page * perPage,
-    (page + 1) * perPage
-  );
-
-  const rows = slice.map((x) => [
+  const rows = s.suggestions.slice(0, 10).map((x, i) => [
     Markup.button.callback(
-      `${x.product?.platform === 'mercadolivre' ? '💛' : x.product?.platform === 'shein' ? '🖤' : '🧡'} ${x.product?.name?.slice(0, 43) || 'Oferta'}`,
-      `sug:${x.id}`
+      `${x.product?.name?.slice(0, 45) || 'Oferta'} (${x.product?.score || 0})`,
+      `sug:${i}`
     )
   ]);
 
-  const nav = [];
-
-  if (page > 0) {
-    nav.push(
-      Markup.button.callback(
-        '⬅️',
-        `sugpage:${page - 1}`
-      )
-    );
-  }
-
-  nav.push(
-    Markup.button.callback(
-      `${page + 1}/${pages}`,
-      'noop'
-    )
-  );
-
-  if (page < pages - 1) {
-    nav.push(
-      Markup.button.callback(
-        '➡️',
-        `sugpage:${page + 1}`
-      )
-    );
-  }
-
-  rows.push(nav);
-
   await ctx.reply(
-    `💡 Sugestões da Auri: ${suggestions.length}\n\n` +
-      'Ela já pesquisou e escreveu a oferta. Toque em uma para ver foto, link público e enviar apenas o seu link de afiliada.',
+    '💡 Sugestões encontradas pela Auri:',
     Markup.inlineKeyboard(rows)
   );
 }
@@ -573,34 +521,28 @@ async function showDiscovery(ctx) {
   const s = readStore();
 
   await ctx.reply(
-    `🤖 Pesquisa automática da Auri\n\n` +
-      `Pesquisa web real: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'}\n` +
-      `Marketplaces: 🧡 Shopee • 🖤 SHEIN • 💛 Mercado Livre\n` +
-      `Categorias: tudo — inclusive alimentos, bebidas, limpeza, casa, beleza, moda, tecnologia, pet, infantil, carro, papelaria, cozinha, fitness e viagem.\n` +
-      `Rodada: até ${config.discoveryMaxPerRun} produtos\n` +
-      `Intervalo: ${config.discoveryEveryMinutes} min\n` +
-      `Meta de envio: até 85/dia (08:00–22:00, a cada 10 min)\n\n` +
-      `🔐 Nada entra na fila com link público. Você escolhe a sugestão, cola o seu link de afiliada e só então aprova.`,
+    `🤖 Busca automática\n\n` +
+      `Buscar sozinha: ${s.autoDiscovery ? '✅' : '❌'}\n` +
+      `Colocar direto na fila: ${s.autoQueueDiscovery ? '✅' : '❌'}\n` +
+      `Intervalo: ${config.discoveryEveryMinutes} min\n\n` +
+      `Quando “direto na fila” estiver desligado, eu coloco os produtos em 💡 Sugestões para você aprovar.`,
     Markup.inlineKeyboard([
       [
         Markup.button.callback(
-          s.autoDiscovery
-            ? '⏹ Desligar pesquisa'
-            : '▶️ Ligar pesquisa',
+          s.autoDiscovery ? '⏹ Desligar busca' : '▶️ Ligar busca',
           'disc:toggle'
         )
       ],
       [
         Markup.button.callback(
-          '🔎 Buscar agora',
-          'disc:now'
+          s.autoQueueDiscovery
+            ? '👀 Mandar para sugestões'
+            : '⚡ Colocar direto na fila',
+          'disc:queue'
         )
       ],
       [
-        Markup.button.callback(
-          '💡 Ver sugestões',
-          'disc:suggestions'
-        )
+        Markup.button.callback('🔎 Buscar agora', 'disc:now')
       ]
     ])
   );
@@ -1210,85 +1152,6 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
-    if (d.step === 'suggestion_affiliate_link') {
-      const affiliateUrl =
-        String(text || '').trim();
-
-      if (!/^https?:\/\//i.test(affiliateUrl)) {
-        return ctx.reply(
-          '⚠️ Cole um link completo começando com http:// ou https://.'
-        );
-      }
-
-      const item = d.data.item;
-      const platform =
-        item?.product?.platform || '';
-
-      const lower =
-        affiliateUrl.toLowerCase();
-
-      const looksRight =
-        platform === 'mercadolivre'
-          ? (
-              lower.includes('meli.la') ||
-              lower.includes('mercadolivre') ||
-              lower.includes('mercadolibre')
-            )
-          : platform === 'shein'
-            ? lower.includes('shein')
-            : platform === 'shopee'
-              ? (
-                  lower.includes('shopee') ||
-                  lower.includes('shope.ee')
-                )
-              : true;
-
-      if (!looksRight) {
-        return ctx.reply(
-          `⚠️ Esse link não parece ser do mesmo marketplace (${platform}). Confira e cole o seu link de afiliada correto.`
-        );
-      }
-
-      const product = {
-        ...(item.product || {}),
-        affiliateLink: affiliateUrl
-      };
-
-      const draft = {
-        step: 'confirm',
-        mode: 'suggestion',
-        data: {
-          ...item,
-          id:
-            item.id ||
-            crypto.randomBytes(4).toString('hex'),
-          link: affiliateUrl,
-          publicLink:
-            item.publicLink ||
-            item.link ||
-            product.publicLink ||
-            product.canonicalUrl,
-          product,
-          suggestionId: item.id
-        }
-      };
-
-      drafts.set(
-        ctx.from.id,
-        draft
-      );
-
-      await ctx.reply(
-        '✅ Link de afiliada recebido. Agora confira a prévia final:',
-        Markup.keyboard([[BTN.cancel]]).resize()
-      );
-
-      return previewOffer(
-        ctx,
-        draft
-      );
-    }
-
     if (d.step === 'wa_phone') {
       try {
         const code = await requestWhatsAppPairingCode(text);
@@ -1377,18 +1240,6 @@ export function startTelegram({ token, adminId }) {
     }
 
     enqueue(d.data);
-
-    if (d.data.suggestionId) {
-      updateStore((x) => {
-        x.suggestions = (x.suggestions || []).filter(
-          (item) =>
-            String(item.id) !==
-            String(d.data.suggestionId)
-        );
-        return x;
-      });
-    }
-
     drafts.delete(ctx.from.id);
 
     await ctx.answerCbQuery('Salvo!');
@@ -1659,11 +1510,21 @@ export function startTelegram({ token, adminId }) {
     await showDiscovery(ctx);
   });
 
+  bot.action('disc:queue', async (ctx) => {
+    updateStore((s) => {
+      s.autoQueueDiscovery = !s.autoQueueDiscovery;
+      return s;
+    });
+
+    await ctx.answerCbQuery();
+    await showDiscovery(ctx);
+  });
+
   bot.action('disc:now', async (ctx) => {
     await ctx.answerCbQuery('Buscando…');
 
     try {
-      const list = await discoverWebOffers({
+      const list = await discoverShopeeOffers({
         force: true
       });
 
@@ -1679,32 +1540,10 @@ export function startTelegram({ token, adminId }) {
     }
   });
 
-  bot.action('disc:suggestions', async (ctx) => {
-    await ctx.answerCbQuery();
-    return showSuggestions(ctx, 0);
-  });
-
-  bot.action(/^sugpage:(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    return showSuggestions(
-      ctx,
-      Number(ctx.match[1])
-    );
-  });
-
-  bot.action(/^sug:(.+)$/, async (ctx) => {
-    const id = String(ctx.match[1]);
+  bot.action(/^sug:(\d+)$/, async (ctx) => {
+    const idx = Number(ctx.match[1]);
     const s = readStore();
-
-    let item =
-      (s.suggestions || []).find(
-        (x) => String(x.id) === id
-      );
-
-    // Compatibilidade com sugestões antigas por índice.
-    if (!item && /^\d+$/.test(id)) {
-      item = s.suggestions[Number(id)];
-    }
+    const item = s.suggestions[idx];
 
     if (!item) {
       return ctx.answerCbQuery(
@@ -1712,48 +1551,26 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
-    await ctx.answerCbQuery(
-      'Abrindo…'
-    );
-
-    if (item.product?.imageUrl) {
-      try {
-        await ctx.replyWithPhoto(
-          item.product.imageUrl
-        );
-      } catch {}
+    if (isDuplicate(item.product, item.link)) {
+      return ctx.answerCbQuery(
+        'Já está na fila ou foi enviada.'
+      );
     }
 
-    const price =
-      Number(item.product?.price || 0);
+    enqueue(item);
 
-    const priceLine =
-      price > 0
-        ? `\n💰 ${price.toLocaleString('pt-BR', {
-            style: 'currency',
-            currency: 'BRL'
-          })}`
-        : '';
-
-    const publicLink =
-      item.publicLink ||
-      item.product?.publicLink ||
-      item.product?.canonicalUrl ||
-      item.link;
-
-    drafts.set(ctx.from.id, {
-      step: 'suggestion_affiliate_link',
-      mode: 'suggestion',
-      data: { item }
+    updateStore((x) => {
+      x.suggestions.splice(idx, 1);
+      return x;
     });
 
-    return ctx.reply(
-      `🛍️ ${item.product?.name || 'Produto'}${priceLine}\n\n` +
-        `${item.text}\n\n` +
-        `🔎 Link público:\n${publicLink}\n\n` +
-        `Agora só falta uma coisa: envie o SEU link de afiliada deste mesmo produto.\n\n` +
-        `Depois eu te mostro a prévia final para você tocar em ✅ Salvar na fila.`,
-      Markup.keyboard([[BTN.cancel]]).resize()
+    await ctx.answerCbQuery(
+      'Adicionada à fila!'
+    );
+
+    await ctx.reply(
+      '✅ Oferta adicionada à fila.',
+      mainMenu()
     );
   });
 
