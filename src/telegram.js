@@ -913,7 +913,7 @@ export function startTelegram({ token, adminId }) {
 
         if (!identified) {
           return ctx.reply(
-            '⚠️ Eu consegui abrir o link, mas o Mercado Livre não me devolveu os dados completos desse produto.\\n\\n' +
+            '⚠️ Eu consegui abrir o link, mas o Mercado Livre não me devolveu os dados completos desse produto.\n\n' +
               'Tente gerar novamente o link de afiliada diretamente na página desse produto e cole aqui. Você não precisa escrever nome, preço ou foto.',
             Markup.keyboard([[BTN.cancel]]).resize()
           );
@@ -941,17 +941,17 @@ export function startTelegram({ token, adminId }) {
           });
 
         await ctx.reply(
-          '✅ Produto identificado automaticamente!\\n\\n' +
-            `📦 ${product.name}\\n` +
-            `💰 ${priceText}\\n` +
-            `${product.imageUrl ? '📸 Foto encontrada\\n' : ''}` +
-            '\\n✨ Agora vou criar o texto da oferta.'
+          '✅ Produto identificado automaticamente!\n\n' +
+            `📦 ${product.name}\n` +
+            `💰 ${priceText}\n` +
+            `${product.imageUrl ? '📸 Foto encontrada\n' : ''}` +
+            '\n✨ Agora vou criar o texto da oferta.'
         );
 
         return finalizeDraftWithAI(ctx, d2);
       } catch (e) {
         return ctx.reply(
-          `⚠️ Não consegui identificar esse produto automaticamente: ${e.message}\\n\\n` +
+          `⚠️ Não consegui identificar esse produto automaticamente: ${e.message}\n\n` +
             'Tente gerar um novo link de afiliada diretamente na página do produto e cole aqui.',
           Markup.keyboard([[BTN.cancel]]).resize()
         );

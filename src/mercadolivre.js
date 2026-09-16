@@ -189,10 +189,51 @@ async function authHeaders() {
   }
 }
 
-export function parseMeliItemId(url) {
-  const s = String(url || '');
-  const m = s.match(/MLB[-_]?([0-9]{6,})/i);
+function normalizeMeliId(value) {
+  const m = String(value || '').match(/MLB[-_]?([0-9]{6,})/i);
   return m ? `MLB${m[1]}` : null;
+}
+
+export function parseMeliReference(value) {
+  let s = String(value || '');
+
+  try {
+    s = decodeURIComponent(s);
+  } catch {}
+
+  // Catalog/PDP URLs use /p/MLB123...
+  const productMatch = s.match(/\/p\/(MLB[-_]?[0-9]{6,})/i);
+  if (productMatch) {
+    return {
+      type: 'product',
+      id: normalizeMeliId(productMatch[1])
+    };
+  }
+
+  // Direct seller listings normally contain MLB-123... in the path.
+  const itemMatch =
+    s.match(/(?:produto\.)?mercadolivre\.com\.br\/(MLB[-_]?[0-9]{6,})/i) ||
+    s.match(/\/(MLB[-_]?[0-9]{6,})-[^/?#]*/i) ||
+    s.match(/\b(MLB[-_]?[0-9]{9,})\b/i);
+
+  if (itemMatch) {
+    return {
+      type: 'item',
+      id: normalizeMeliId(itemMatch[1])
+    };
+  }
+
+  return null;
+}
+
+export function parseMeliItemId(url) {
+  const ref = parseMeliReference(url);
+  return ref?.type === 'item' ? ref.id : null;
+}
+
+export function parseMeliProductId(url) {
+  const ref = parseMeliReference(url);
+  return ref?.type === 'product' ? ref.id : null;
 }
 
 export async function getMeliProduct(itemId) {
@@ -209,6 +250,9 @@ export async function getMeliProduct(itemId) {
     );
   }
 
+  const price = Number(json.price || json.base_price || 0);
+  const originalPrice = Number(json.original_price || 0);
+
   return {
     platform: 'mercadolivre',
     itemId: json.id,
@@ -218,14 +262,115 @@ export async function getMeliProduct(itemId) {
       json.secure_thumbnail ||
       json.thumbnail?.replace('http://', 'https://') ||
       null,
-    price: Number(json.price || json.base_price || 0),
+    price,
+    originalPrice:
+      originalPrice > price ? originalPrice : 0,
     canonicalUrl: json.permalink || '',
     affiliateLink: null,
     sales: Number(json.sold_quantity || 0),
     rating: 0,
+    discountPct:
+      originalPrice > price && price > 0
+        ? ((originalPrice - price) / originalPrice) * 100
+        : 0,
+    score: 50
+  };
+}
+
+export async function getMeliCatalogProduct(productId) {
+  const headers = await authHeaders();
+
+  const detailRes = await fetch(
+    `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`,
+    { headers }
+  );
+
+  const detail = await detailRes.json().catch(() => ({}));
+
+  if (!detailRes.ok) {
+    throw new Error(
+      detail?.message ||
+      `Mercado Livre produto HTTP ${detailRes.status}`
+    );
+  }
+
+  let itemId =
+    detail?.buy_box_winner?.item_id ||
+    detail?.buy_box_winner?.id ||
+    null;
+
+  if (!itemId) {
+    const itemsRes = await fetch(
+      `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}/items`,
+      { headers }
+    );
+
+    const items = await itemsRes.json().catch(() => ({}));
+
+    if (itemsRes.ok) {
+      const rows = Array.isArray(items?.results)
+        ? items.results
+        : [];
+
+      const listing =
+        rows.find((x) => x?.item_id && Number(x?.price || 0) > 0) ||
+        rows.find((x) => x?.item_id) ||
+        null;
+
+      itemId = listing?.item_id || null;
+    }
+  }
+
+  if (itemId) {
+    const product = await getMeliProduct(itemId);
+    product.productId = productId;
+    return product;
+  }
+
+  const price = Number(
+    detail?.buy_box_winner?.price ||
+    detail?.buy_box_winner_price_range?.min?.price ||
+    0
+  );
+
+  const picture =
+    Array.isArray(detail?.pictures) && detail.pictures.length
+      ? detail.pictures[0]
+      : null;
+
+  return {
+    platform: 'mercadolivre',
+    productId,
+    itemId: null,
+    name: detail?.name || '',
+    imageUrl:
+      picture?.secure_url ||
+      picture?.url ||
+      picture?.thumbnail ||
+      null,
+    price,
+    originalPrice: 0,
+    canonicalUrl: detail?.permalink || '',
+    affiliateLink: null,
+    sales: 0,
+    rating: 0,
     discountPct: 0,
     score: 50
   };
+}
+
+export async function getMeliProductFromUrl(url) {
+  const ref = parseMeliReference(url);
+
+  if (!ref) {
+    return null;
+  }
+
+  if (ref.type === 'product') {
+    return getMeliCatalogProduct(ref.id);
+  }
+
+  return getMeliProduct(ref.id);
 }
 
 export async function searchMeli(keyword, limit = 5) {
