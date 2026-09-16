@@ -229,40 +229,136 @@ export async function getMeliProduct(itemId) {
 }
 
 export async function searchMeli(keyword, limit = 5) {
-  const url = new URL(
-    'https://api.mercadolibre.com/sites/MLB/search'
-  );
+  const auth = await authHeaders();
 
-  url.searchParams.set('q', keyword);
-  url.searchParams.set(
-    'limit',
-    String(Math.min(20, Math.max(1, limit)))
-  );
-
-  const res = await fetch(
-    url,
-    { headers: await authHeaders() }
-  );
-
-  const json = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
+  if (!auth.Authorization) {
     throw new Error(
-      json?.message || `Mercado Livre HTTP ${res.status}`
+      'Mercado Livre: Access Token não disponível. Autorize novamente com /meli.'
     );
   }
 
-  return (json.results || []).map((x) => ({
-    platform: 'mercadolivre',
-    itemId: x.id,
-    name: x.title || '',
-    imageUrl: x.thumbnail || null,
-    price: Number(x.price || 0),
-    canonicalUrl: x.permalink || '',
-    affiliateLink: null,
-    sales: Number(x.sold_quantity || 0),
-    rating: 0,
-    discountPct: 0,
-    score: 50
-  }));
+  const searchUrl = new URL(
+    'https://api.mercadolibre.com/products/search'
+  );
+
+  searchUrl.searchParams.set('status', 'active');
+  searchUrl.searchParams.set('site_id', 'MLB');
+  searchUrl.searchParams.set('q', String(keyword || '').trim());
+  searchUrl.searchParams.set(
+    'limit',
+    String(Math.min(20, Math.max(8, Number(limit) * 2)))
+  );
+
+  const searchRes = await fetch(searchUrl, {
+    headers: auth
+  });
+
+  const searchJson = await searchRes
+    .json()
+    .catch(() => ({}));
+
+  if (!searchRes.ok) {
+    const detail =
+      searchJson?.message ||
+      searchJson?.error_description ||
+      searchJson?.error ||
+      'erro sem detalhes';
+
+    throw new Error(
+      `Mercado Livre ${searchRes.status}: ${detail}`
+    );
+  }
+
+  const candidates = Array.isArray(searchJson.results)
+    ? searchJson.results
+    : [];
+
+  if (!candidates.length) {
+    return [];
+  }
+
+  const details = await Promise.allSettled(
+    candidates.map(async (candidate) => {
+      const id = candidate?.id;
+      if (!id) return candidate;
+
+      const res = await fetch(
+        `https://api.mercadolibre.com/products/${encodeURIComponent(id)}`,
+        { headers: auth }
+      );
+
+      if (!res.ok) {
+        return candidate;
+      }
+
+      return await res.json().catch(() => candidate);
+    })
+  );
+
+  const normalized = details
+    .map((entry, index) => {
+      const x =
+        entry.status === 'fulfilled'
+          ? entry.value
+          : candidates[index];
+
+      const winner = x?.buy_box_winner || {};
+
+      const price = Number(
+        winner.price ||
+        x?.buy_box_winner_price_range?.min?.price ||
+        0
+      );
+
+      const originalPrice = Number(
+        winner.original_price || 0
+      );
+
+      const picture =
+        Array.isArray(x?.pictures) && x.pictures.length
+          ? x.pictures[0]
+          : null;
+
+      const imageUrl =
+        picture?.secure_url ||
+        picture?.url ||
+        picture?.thumbnail ||
+        null;
+
+      const discountPct =
+        originalPrice > price && price > 0
+          ? Math.round(
+              ((originalPrice - price) / originalPrice) * 100
+            )
+          : 0;
+
+      return {
+        platform: 'mercadolivre',
+        productId: x?.id || candidates[index]?.id || null,
+        itemId: winner.item_id || null,
+        name: x?.name || candidates[index]?.name || '',
+        imageUrl,
+        price,
+        originalPrice:
+          originalPrice > price ? originalPrice : 0,
+        canonicalUrl:
+          x?.permalink ||
+          candidates[index]?.permalink ||
+          '',
+        affiliateLink: null,
+        sales: Number(winner.sold_quantity || 0),
+        rating: 0,
+        discountPct,
+        score: 50
+      };
+    })
+    .filter(
+      (p) =>
+        p.name &&
+        p.canonicalUrl &&
+        p.price > 0
+    )
+    .slice(0, Math.max(1, Number(limit) || 5));
+
+  return normalized;
 }
