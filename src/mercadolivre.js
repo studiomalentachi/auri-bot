@@ -243,7 +243,10 @@ export async function searchMeli(keyword, limit = 5) {
 
   searchUrl.searchParams.set('status', 'active');
   searchUrl.searchParams.set('site_id', 'MLB');
-  searchUrl.searchParams.set('q', String(keyword || '').trim());
+  searchUrl.searchParams.set(
+    'q',
+    String(keyword || '').trim()
+  );
   searchUrl.searchParams.set(
     'limit',
     String(Math.min(20, Math.max(8, Number(limit) * 2)))
@@ -277,88 +280,175 @@ export async function searchMeli(keyword, limit = 5) {
     return [];
   }
 
-  const details = await Promise.allSettled(
-    candidates.map(async (candidate) => {
-      const id = candidate?.id;
-      if (!id) return candidate;
+  async function fetchJson(url) {
+    const res = await fetch(url, { headers: auth });
+    const json = await res.json().catch(() => ({}));
 
-      const res = await fetch(
-        `https://api.mercadolibre.com/products/${encodeURIComponent(id)}`,
-        { headers: auth }
+    return {
+      ok: res.ok,
+      status: res.status,
+      json
+    };
+  }
+
+  async function resolveCandidate(candidate) {
+    const productId = candidate?.id;
+
+    if (!productId) {
+      return null;
+    }
+
+    const detailResult = await fetchJson(
+      `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`
+    );
+
+    const product = detailResult.ok
+      ? detailResult.json
+      : candidate;
+
+    let winner = product?.buy_box_winner || null;
+    let itemId = winner?.item_id || null;
+    let listing = winner || null;
+
+    if (!itemId) {
+      const itemsResult = await fetchJson(
+        `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}/items?limit=5`
       );
 
-      if (!res.ok) {
-        return candidate;
-      }
+      const listings = Array.isArray(
+        itemsResult.json?.results
+      )
+        ? itemsResult.json.results
+        : [];
 
-      return await res.json().catch(() => candidate);
-    })
-  );
-
-  const normalized = details
-    .map((entry, index) => {
-      const x =
-        entry.status === 'fulfilled'
-          ? entry.value
-          : candidates[index];
-
-      const winner = x?.buy_box_winner || {};
-
-      const price = Number(
-        winner.price ||
-        x?.buy_box_winner_price_range?.min?.price ||
-        0
-      );
-
-      const originalPrice = Number(
-        winner.original_price || 0
-      );
-
-      const picture =
-        Array.isArray(x?.pictures) && x.pictures.length
-          ? x.pictures[0]
-          : null;
-
-      const imageUrl =
-        picture?.secure_url ||
-        picture?.url ||
-        picture?.thumbnail ||
+      listing =
+        listings.find(
+          (x) =>
+            x?.item_id &&
+            Number(x?.price || 0) > 0
+        ) ||
+        listings[0] ||
         null;
 
-      const discountPct =
-        originalPrice > price && price > 0
-          ? Math.round(
-              ((originalPrice - price) / originalPrice) * 100
-            )
-          : 0;
+      itemId = listing?.item_id || null;
+    }
 
-      return {
-        platform: 'mercadolivre',
-        productId: x?.id || candidates[index]?.id || null,
-        itemId: winner.item_id || null,
-        name: x?.name || candidates[index]?.name || '',
-        imageUrl,
-        price,
-        originalPrice:
-          originalPrice > price ? originalPrice : 0,
-        canonicalUrl:
-          x?.permalink ||
-          candidates[index]?.permalink ||
-          '',
-        affiliateLink: null,
-        sales: Number(winner.sold_quantity || 0),
-        rating: 0,
-        discountPct,
-        score: 50
-      };
-    })
+    let item = null;
+
+    if (itemId) {
+      const itemResult = await fetchJson(
+        `https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`
+      );
+
+      if (itemResult.ok) {
+        item = itemResult.json;
+      }
+    }
+
+    const price = Number(
+      item?.price ||
+      listing?.price ||
+      winner?.price ||
+      0
+    );
+
+    const originalPrice = Number(
+      item?.original_price ||
+      listing?.original_price ||
+      winner?.original_price ||
+      0
+    );
+
+    const productPicture =
+      Array.isArray(product?.pictures) &&
+      product.pictures.length
+        ? product.pictures[0]
+        : null;
+
+    const imageUrl =
+      item?.pictures?.[0]?.secure_url ||
+      item?.secure_thumbnail ||
+      item?.thumbnail?.replace(
+        'http://',
+        'https://'
+      ) ||
+      productPicture?.secure_url ||
+      productPicture?.url ||
+      productPicture?.thumbnail ||
+      null;
+
+    const canonicalUrl =
+      item?.permalink ||
+      product?.permalink ||
+      candidate?.permalink ||
+      '';
+
+    const name =
+      item?.title ||
+      product?.name ||
+      candidate?.name ||
+      '';
+
+    if (!name || !canonicalUrl || price <= 0) {
+      return null;
+    }
+
+    const discountPct =
+      originalPrice > price
+        ? Math.round(
+            ((originalPrice - price) /
+              originalPrice) *
+              100
+          )
+        : 0;
+
+    return {
+      platform: 'mercadolivre',
+      productId,
+      itemId:
+        item?.id ||
+        itemId ||
+        null,
+      name,
+      imageUrl,
+      price,
+      originalPrice:
+        originalPrice > price
+          ? originalPrice
+          : 0,
+      canonicalUrl,
+      affiliateLink: null,
+      sales: Number(
+        item?.sold_quantity ||
+        listing?.sold_quantity ||
+        0
+      ),
+      rating: 0,
+      discountPct,
+      score: 50
+    };
+  }
+
+  const resolved = await Promise.allSettled(
+    candidates.map(resolveCandidate)
+  );
+
+  const products = resolved
     .filter(
-      (p) =>
-        p.name &&
-        p.canonicalUrl &&
-        p.price > 0
+      (entry) =>
+        entry.status === 'fulfilled' &&
+        entry.value
     )
-    .slice(0, Math.max(1, Number(limit) || 5));
+    .map((entry) => entry.value);
 
-  return normalized;
+  if (!products.length) {
+    throw new Error(
+      'Mercado Livre respondeu à busca, mas não retornou anúncios compráveis com preço. Tente um termo mais específico, como “luminária de mesa” ou “organizador de maquiagem”.'
+    );
+  }
+
+  return products.slice(
+    0,
+    Math.max(1, Number(limit) || 5)
+  );
 }
