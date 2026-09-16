@@ -118,169 +118,261 @@ function parseArray(text) {
   return [];
 }
 
+const MARKETPLACE_TARGETS = [
+  {
+    platform: 'shopee',
+    label: 'Shopee Brasil',
+    domains: ['shopee.com.br']
+  },
+  {
+    platform: 'shein',
+    label: 'SHEIN Brasil',
+    domains: ['br.shein.com', 'shein.com']
+  },
+  {
+    platform: 'mercadolivre',
+    label: 'Mercado Livre Brasil',
+    domains: ['mercadolivre.com.br']
+  }
+];
+
+function nextMarketplaceTarget() {
+  const s = readStore();
+  const index = Number(s.discoveryMarketplaceIndex || 0);
+  const target =
+    MARKETPLACE_TARGETS[index % MARKETPLACE_TARGETS.length];
+
+  updateStore((x) => {
+    x.discoveryMarketplaceIndex =
+      (index + 1) % MARKETPLACE_TARGETS.length;
+    return x;
+  });
+
+  return target;
+}
+
+function parseSourceCount(text, kind) {
+  const s = String(text || '');
+
+  const soldPatterns = [
+    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|comprados|pedidos)/i,
+    /(?:vendidos|vendido|comprados|pedidos)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
+  ];
+
+  const reviewPatterns = [
+    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:avalia[cç][oõ]es|reviews|coment[aá]rios)/i,
+    /(?:avalia[cç][oõ]es|reviews|coment[aá]rios)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
+  ];
+
+  const patterns =
+    kind === 'sold'
+      ? soldPatterns
+      : reviewPatterns;
+
+  for (const pattern of patterns) {
+    const match = s.match(pattern);
+    if (!match) continue;
+
+    const raw = String(match[1] || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '');
+
+    let multiplier = 1;
+    let numeric = raw;
+
+    if (/(mil|k)$/.test(raw)) {
+      multiplier = 1000;
+      numeric = raw.replace(/(mil|k)$/, '');
+    }
+
+    // "1,2 mil" = 1200; "1.234" sem sufixo = 1234.
+    if (multiplier === 1000) {
+      numeric = numeric.replace('.', '').replace(',', '.');
+    } else if (
+      numeric.includes('.') &&
+      !numeric.includes(',')
+    ) {
+      numeric = numeric.replace(/\./g, '');
+    } else {
+      numeric = numeric.replace(/\./g, '').replace(',', '.');
+    }
+
+    const value = Number(numeric);
+
+    if (Number.isFinite(value) && value > 0) {
+      return Math.floor(value * multiplier);
+    }
+  }
+
+  return 0;
+}
+
+function parseSourcePrice(text) {
+  const s = String(text || '');
+  const match = s.match(
+    /R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})|[0-9]+(?:,[0-9]{2})?)/i
+  );
+
+  if (!match) return 0;
+
+  const n = Number(
+    match[1]
+      .replace(/\./g, '')
+      .replace(',', '.')
+  );
+
+  return Number.isFinite(n) && n > 0
+    ? n
+    : 0;
+}
+
 async function webSearchProducts(categories) {
-  const key = process.env.GEMINI_API_KEY;
+  const key = process.env.TAVILY_API_KEY;
 
   if (!key) {
     throw new Error(
-      'GEMINI_API_KEY não configurada no Railway.'
+      'TAVILY_API_KEY não configurada no Railway.'
     );
   }
 
-  const model =
-    process.env.GEMINI_SEARCH_MODEL ||
-    'gemini-2.5-flash';
+  const target = nextMarketplaceTarget();
+  const theme = categories.join(' ou ');
 
-  const amount = config.discoveryMaxPerRun;
+  const query =
+    `${theme} produtos ${target.label} Brasil ` +
+    `vendidos avaliações preço promoção`;
 
-  const prompt = `
-Pesquise AGORA na web, usando a Pesquisa Google, produtos reais
-que estejam à venda no Brasil nestes marketplaces:
-
-- Shopee Brasil
-- SHEIN Brasil
-- Mercado Livre Brasil
-
-Temas desta rodada:
-${categories.map((x) => `- ${x}`).join('\n')}
-
-Quero até ${amount} PRODUTOS DIFERENTES e atuais.
-
-OBJETIVO:
-Montar sugestões para um grupo brasileiro de achadinhos.
-Pode incluir alimentos, bebidas, supermercado, limpeza, casa,
-decoração, cozinha, organização, beleza, moda, tecnologia, pet,
-infantil, automotivo, papelaria, fitness, viagem, presentes,
-utilidades e itens sazonais.
-
-DISTRIBUIÇÃO:
-- Misture Shopee, SHEIN e Mercado Livre.
-- Quando houver resultados válidos, tente trazer pelo menos
-  1 produto de cada marketplace nesta rodada.
-- Não concentre todos os produtos no mesmo nicho.
-
-REGRAS DO LINK — OBRIGATÓRIAS:
-- Retorne SOMENTE página DIRETA de um produto específico.
-- NÃO retorne busca, categoria, vitrine, loja, coleção ou home.
-- Use o URL público EXATO que apareceu no resultado da pesquisa.
-- NÃO invente URL.
-- NÃO monte URL a partir do nome.
-- NÃO encurte nem altere o link.
-- NÃO gere link de afiliado.
-- O produto descrito precisa ser exatamente o produto do link.
-
-REGRAS DE VERACIDADE:
-- A pesquisa é para descobrir CANDIDATOS. O sistema vai abrir
-  e validar cada página depois.
-- NÃO invente preço.
-- NÃO invente preço anterior.
-- NÃO invente desconto.
-- NÃO invente cupom.
-- NÃO invente vendidos/pedidos.
-- NÃO invente avaliações/reviews.
-- NÃO invente material, tamanho, variação ou benefício.
-- Se um dado não estiver claramente visível/confirmável,
-  retorne 0 ou null.
-
-PROVA DE VENDA — OBRIGATÓRIA:
-Só retorne produtos que tenham indício público de que já foram
-comprados.
-
-Aceite como candidato quando a pesquisa mostrar:
-1) vendidos/pedidos maior que 0; OU
-2) avaliações/reviews maior que 0.
-
-Preferências:
-- Mercado Livre: priorize anúncios com vendidos > 0.
-- Shopee: priorize vendidos > 0 ou avaliações > 0.
-- SHEIN: avaliações/reviews > 0 podem servir como prova,
-  pois o contador de vendas nem sempre é exibido.
-
-Se não houver nenhuma prova de compra, descarte e procure outro.
-
-Retorne SOMENTE JSON válido, sem markdown e sem explicações.
-
-Formato:
-[
-  {
-    "platform": "shopee|shein|mercadolivre",
-    "name": "nome exato do produto",
-    "price": 0,
-    "originalPrice": 0,
-    "discountPct": 0,
-    "publicLink": "https://...",
-    "imageUrl": null,
-    "soldCount": 0,
-    "reviewCount": 0,
-    "salesEvidence": "prova de compra encontrada na pesquisa",
-    "couponCode": null,
-    "couponVerified": false,
-    "reason": "motivo factual e curto"
-  }
-]
-`;
-
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/` +
-    `${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt }
-          ]
-        }
-      ],
-      tools: [
-        {
-          google_search: {}
-        }
-      ],
-      generationConfig: {
-        temperature: 0.15,
-        maxOutputTokens: 2600
-      }
-    })
-  });
+  const res = await fetch(
+    'https://api.tavily.com/search',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query,
+        topic: 'general',
+        search_depth: 'basic',
+        max_results: Math.max(
+          10,
+          Number(config.discoveryMaxPerRun || 6) * 2
+        ),
+        include_answer: false,
+        include_raw_content: false,
+        include_images: true,
+        include_image_descriptions: false,
+        include_domains: target.domains,
+        include_domains_mode: 'filter',
+        include_usage: true,
+        safe_search: true
+      })
+    }
+  );
 
   const json = await res.json();
 
   if (!res.ok) {
     const raw =
-      json?.error?.message ||
-      `Gemini Search HTTP ${res.status}`;
+      json?.detail?.error ||
+      json?.detail ||
+      json?.error ||
+      `Tavily HTTP ${res.status}`;
 
-    if (
-      res.status === 429 ||
-      /quota|rate limit|resource exhausted/i.test(raw)
-    ) {
+    if (res.status === 429) {
       throw new Error(
-        'A pesquisa atingiu o limite temporário do Gemini. ' +
-        'Aguarde a cota liberar e tente novamente. ' +
-        'A Auri continua configurada para pesquisar em lotes pequenos.'
+        'A Tavily atingiu o limite temporário de pesquisas. ' +
+        'Aguarde um pouco e tente novamente.'
       );
     }
 
-    throw new Error(raw);
+    if (
+      res.status === 432 ||
+      res.status === 433
+    ) {
+      throw new Error(
+        'A cota da Tavily chegou ao limite do plano. ' +
+        'Confira o painel da Tavily antes de pesquisar novamente.'
+      );
+    }
+
+    throw new Error(
+      typeof raw === 'string'
+        ? raw
+        : JSON.stringify(raw)
+    );
   }
 
-  const text = String(
-    json?.candidates?.[0]?.content?.parts
-      ?.map((p) => p.text || '')
-      .join('\n') || ''
-  ).trim();
+  const results =
+    Array.isArray(json?.results)
+      ? json.results
+      : [];
 
-  const rows = parseArray(text);
+  const rows = results
+    .map((result) => {
+      const url =
+        String(result?.url || '').trim();
+
+      const title =
+        String(result?.title || '').trim();
+
+      const content =
+        String(result?.content || '').trim();
+
+      const sourceText =
+        `${title}\n${content}`;
+
+      const resultImages =
+        Array.isArray(result?.images)
+          ? result.images
+          : [];
+
+      const firstImage =
+        resultImages
+          .map((x) =>
+            typeof x === 'string'
+              ? x
+              : x?.url
+          )
+          .find(Boolean) || null;
+
+      return {
+        platform: target.platform,
+        name: title,
+        price: parseSourcePrice(sourceText),
+        originalPrice: 0,
+        discountPct: 0,
+        publicLink: url,
+        imageUrl: firstImage,
+        soldCount:
+          parseSourceCount(
+            sourceText,
+            'sold'
+          ),
+        reviewCount:
+          parseSourceCount(
+            sourceText,
+            'reviews'
+          ),
+        salesEvidence: content,
+        couponCode: null,
+        couponVerified: false,
+        reason:
+          'Encontrado diretamente pela pesquisa Tavily.',
+        sourceVerified: true,
+        sourceSnippet: content,
+        tavilyScore:
+          Number(result?.score || 0)
+      };
+    })
+    .filter((x) =>
+      /^https?:\/\//i.test(x.publicLink)
+    );
 
   if (!rows.length) {
     throw new Error(
-      'O Gemini pesquisou, mas não retornou produtos estruturados nesta rodada.'
+      `A Tavily não encontrou páginas de produto válidas na ${target.label} nesta rodada.`
     );
   }
 
@@ -317,8 +409,8 @@ function isDirectProductUrl(platform, url) {
 
   if (platform === 'shein') {
     return (
-      /shein\.com(?:\.br)?\/.+-p-\d+\.html/i.test(s) ||
-      /shein\.com(?:\.br)?\/.+-p-\d+/i.test(s)
+      /(?:br\.)?shein\.com(?:\.br)?\/.+-p-\d+\.html/i.test(s) ||
+      /(?:br\.)?shein\.com(?:\.br)?\/.+-p-\d+/i.test(s)
     );
   }
 
@@ -687,12 +779,18 @@ async function enrich(row) {
   // Vendas/avaliações só valem se vierem da API ou da página aberta.
   const soldCount = Math.max(
     countNumber(apiProduct?.sales),
-    countNumber(meta.soldCount)
+    countNumber(meta.soldCount),
+    row.sourceVerified
+      ? countNumber(row.soldCount)
+      : 0
   );
 
   const reviewCount = Math.max(
     countNumber(apiProduct?.reviewCount),
-    countNumber(meta.reviewCount)
+    countNumber(meta.reviewCount),
+    row.sourceVerified
+      ? countNumber(row.reviewCount)
+      : 0
   );
 
   // O redirect precisa terminar numa página direta de produto.
@@ -746,8 +844,8 @@ async function enrich(row) {
     salesVerified: true,
     salesEvidence:
       soldCount > 0
-        ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos confirmados`
-        : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews confirmados`,
+        ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos encontrados na página, API ou snippet indexado do próprio produto`
+        : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews encontrados na página, API ou snippet indexado do próprio produto`,
     score:
       Math.max(
         50,
