@@ -237,47 +237,10 @@ export async function searchMeli(keyword, limit = 5) {
     );
   }
 
-  const searchUrl = new URL(
-    'https://api.mercadolibre.com/products/search'
-  );
+  const term = String(keyword || '').trim();
 
-  searchUrl.searchParams.set('status', 'active');
-  searchUrl.searchParams.set('site_id', 'MLB');
-  searchUrl.searchParams.set(
-    'q',
-    String(keyword || '').trim()
-  );
-  searchUrl.searchParams.set(
-    'limit',
-    String(Math.min(20, Math.max(8, Number(limit) * 2)))
-  );
-
-  const searchRes = await fetch(searchUrl, {
-    headers: auth
-  });
-
-  const searchJson = await searchRes
-    .json()
-    .catch(() => ({}));
-
-  if (!searchRes.ok) {
-    const detail =
-      searchJson?.message ||
-      searchJson?.error_description ||
-      searchJson?.error ||
-      'erro sem detalhes';
-
-    throw new Error(
-      `Mercado Livre ${searchRes.status}: ${detail}`
-    );
-  }
-
-  const candidates = Array.isArray(searchJson.results)
-    ? searchJson.results
-    : [];
-
-  if (!candidates.length) {
-    return [];
+  if (!term) {
+    throw new Error('Digite o nome do produto que quer procurar.');
   }
 
   async function fetchJson(url) {
@@ -291,164 +254,234 @@ export async function searchMeli(keyword, limit = 5) {
     };
   }
 
-  async function resolveCandidate(candidate) {
-    const productId = candidate?.id;
+  // 1) Descobrir as categorias mais prováveis para o termo digitado.
+  const predictorUrl = new URL(
+    'https://api.mercadolibre.com/sites/MLB/domain_discovery/search'
+  );
+  predictorUrl.searchParams.set('limit', '3');
+  predictorUrl.searchParams.set('q', term);
 
-    if (!productId) {
-      return null;
-    }
+  const predictor = await fetchJson(predictorUrl);
 
-    const detailResult = await fetchJson(
-      `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}`
+  if (!predictor.ok) {
+    const detail =
+      predictor.json?.message ||
+      predictor.json?.error_description ||
+      predictor.json?.error ||
+      'erro sem detalhes';
+
+    throw new Error(
+      `Mercado Livre ${predictor.status}: ${detail}`
+    );
+  }
+
+  const predictions = Array.isArray(predictor.json)
+    ? predictor.json
+    : [];
+
+  if (!predictions.length) {
+    throw new Error(
+      'O Mercado Livre não conseguiu identificar uma categoria para essa busca.'
+    );
+  }
+
+  // 2) Buscar os mais vendidos das categorias previstas.
+  const highlights = [];
+
+  for (const prediction of predictions) {
+    const categoryId = prediction?.category_id;
+
+    if (!categoryId) continue;
+
+    const result = await fetchJson(
+      `https://api.mercadolibre.com/highlights/MLB/category/${encodeURIComponent(categoryId)}`
     );
 
-    const product = detailResult.ok
-      ? detailResult.json
-      : candidate;
+    if (!result.ok) {
+      // Algumas categorias não possuem ranking; apenas tenta a próxima.
+      continue;
+    }
 
-    let winner = product?.buy_box_winner || null;
-    let itemId = winner?.item_id || null;
-    let listing = winner || null;
+    const content = Array.isArray(result.json?.content)
+      ? result.json.content
+      : [];
 
-    if (!itemId) {
-      const itemsResult = await fetchJson(
-        `https://api.mercadolibre.com/products/${encodeURIComponent(productId)}/items?limit=5`
+    for (const hit of content) {
+      highlights.push({
+        ...hit,
+        categoryId,
+        categoryName:
+          prediction?.category_name ||
+          result.json?.query_data?.id ||
+          categoryId
+      });
+    }
+
+    // Não precisamos consultar muitas categorias se já temos variedade suficiente.
+    if (highlights.length >= Math.max(12, Number(limit) * 2)) {
+      break;
+    }
+  }
+
+  if (!highlights.length) {
+    throw new Error(
+      'Encontrei a categoria, mas ela não possui ranking de mais vendidos disponível no Mercado Livre.'
+    );
+  }
+
+  async function itemFromId(itemId, meta = {}) {
+    try {
+      const product = await getMeliProduct(itemId);
+
+      if (
+        !product ||
+        !product.name ||
+        !product.canonicalUrl ||
+        Number(product.price || 0) <= 0
+      ) {
+        return null;
+      }
+
+      return {
+        ...product,
+        highlightPosition: Number(meta.position || 0),
+        highlightType: meta.type || 'ITEM',
+        categoryId: meta.categoryId || null,
+        categoryName: meta.categoryName || null,
+        score: Math.max(
+          50,
+          100 - Number(meta.position || 50)
+        )
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function resolveHighlight(hit) {
+    const type = String(hit?.type || '').toUpperCase();
+    const id = hit?.id;
+
+    if (!id) return null;
+
+    // Ranking já devolveu uma publicação.
+    if (type === 'ITEM') {
+      return itemFromId(id, hit);
+    }
+
+    // Ranking devolveu um produto de catálogo:
+    // procura uma publicação comprável que compete nessa PDP.
+    if (type === 'PRODUCT') {
+      const items = await fetchJson(
+        `https://api.mercadolibre.com/products/${encodeURIComponent(id)}/items`
       );
 
-      const listings = Array.isArray(
-        itemsResult.json?.results
-      )
-        ? itemsResult.json.results
+      if (!items.ok) return null;
+
+      const rows = Array.isArray(items.json?.results)
+        ? items.json.results
         : [];
 
-      listing =
-        listings.find(
+      const listing =
+        rows.find(
           (x) =>
             x?.item_id &&
             Number(x?.price || 0) > 0
         ) ||
-        listings[0] ||
+        rows.find((x) => x?.item_id) ||
         null;
 
-      itemId = listing?.item_id || null;
+      if (!listing?.item_id) return null;
+
+      return itemFromId(listing.item_id, hit);
     }
 
-    let item = null;
-
-    if (itemId) {
-      const itemResult = await fetchJson(
-        `https://api.mercadolibre.com/items/${encodeURIComponent(itemId)}`
+    // Ranking novo pode devolver USER_PRODUCT.
+    // Tentamos descobrir uma condição de venda ativa associada a ele.
+    if (type === 'USER_PRODUCT') {
+      const up = await fetchJson(
+        `https://api.mercadolibre.com/user-products/${encodeURIComponent(id)}`
       );
 
-      if (itemResult.ok) {
-        item = itemResult.json;
-      }
+      if (!up.ok) return null;
+
+      const sellerId =
+        up.json?.seller_id ||
+        up.json?.user_id ||
+        up.json?.seller?.id ||
+        null;
+
+      if (!sellerId) return null;
+
+      const itemsUrl = new URL(
+        `https://api.mercadolibre.com/users/${encodeURIComponent(sellerId)}/items/search`
+      );
+      itemsUrl.searchParams.set('user_product_id', id);
+      itemsUrl.searchParams.set('status', 'active');
+
+      const items = await fetchJson(itemsUrl);
+
+      if (!items.ok) return null;
+
+      const ids = Array.isArray(items.json?.results)
+        ? items.json.results
+        : [];
+
+      if (!ids.length) return null;
+
+      return itemFromId(ids[0], hit);
     }
 
-    const price = Number(
-      item?.price ||
-      listing?.price ||
-      winner?.price ||
-      0
-    );
-
-    const originalPrice = Number(
-      item?.original_price ||
-      listing?.original_price ||
-      winner?.original_price ||
-      0
-    );
-
-    const productPicture =
-      Array.isArray(product?.pictures) &&
-      product.pictures.length
-        ? product.pictures[0]
-        : null;
-
-    const imageUrl =
-      item?.pictures?.[0]?.secure_url ||
-      item?.secure_thumbnail ||
-      item?.thumbnail?.replace(
-        'http://',
-        'https://'
-      ) ||
-      productPicture?.secure_url ||
-      productPicture?.url ||
-      productPicture?.thumbnail ||
-      null;
-
-    const canonicalUrl =
-      item?.permalink ||
-      product?.permalink ||
-      candidate?.permalink ||
-      '';
-
-    const name =
-      item?.title ||
-      product?.name ||
-      candidate?.name ||
-      '';
-
-    if (!name || !canonicalUrl || price <= 0) {
-      return null;
-    }
-
-    const discountPct =
-      originalPrice > price
-        ? Math.round(
-            ((originalPrice - price) /
-              originalPrice) *
-              100
-          )
-        : 0;
-
-    return {
-      platform: 'mercadolivre',
-      productId,
-      itemId:
-        item?.id ||
-        itemId ||
-        null,
-      name,
-      imageUrl,
-      price,
-      originalPrice:
-        originalPrice > price
-          ? originalPrice
-          : 0,
-      canonicalUrl,
-      affiliateLink: null,
-      sales: Number(
-        item?.sold_quantity ||
-        listing?.sold_quantity ||
-        0
-      ),
-      rating: 0,
-      discountPct,
-      score: 50
-    };
+    return null;
   }
 
-  const resolved = await Promise.allSettled(
-    candidates.map(resolveCandidate)
+  // Resolver mais candidatos do que o necessário porque alguns tipos podem
+  // não estar acessíveis para uma conta de afiliada.
+  const uniqueHighlights = [];
+  const seenHighlightIds = new Set();
+
+  for (const hit of highlights) {
+    const key = `${hit.type}:${hit.id}`;
+
+    if (!hit.id || seenHighlightIds.has(key)) continue;
+
+    seenHighlightIds.add(key);
+    uniqueHighlights.push(hit);
+
+    if (uniqueHighlights.length >= 20) break;
+  }
+
+  const settled = await Promise.allSettled(
+    uniqueHighlights.map(resolveHighlight)
   );
 
-  const products = resolved
-    .filter(
-      (entry) =>
-        entry.status === 'fulfilled' &&
-        entry.value
-    )
-    .map((entry) => entry.value);
+  const products = [];
+  const seenItems = new Set();
+
+  for (const entry of settled) {
+    if (
+      entry.status !== 'fulfilled' ||
+      !entry.value ||
+      !entry.value.itemId
+    ) {
+      continue;
+    }
+
+    if (seenItems.has(entry.value.itemId)) continue;
+
+    seenItems.add(entry.value.itemId);
+    products.push(entry.value);
+
+    if (products.length >= Math.max(1, Number(limit) || 5)) {
+      break;
+    }
+  }
 
   if (!products.length) {
     throw new Error(
-      'Mercado Livre respondeu à busca, mas não retornou anúncios compráveis com preço. Tente um termo mais específico, como “luminária de mesa” ou “organizador de maquiagem”.'
+      'Encontrei os mais vendidos da categoria, mas o Mercado Livre não liberou anúncios compráveis desses resultados para esta integração.'
     );
   }
 
-  return products.slice(
-    0,
-    Math.max(1, Number(limit) || 5)
-  );
+  return products;
 }

@@ -1042,6 +1042,37 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
+    if (d.step === 'meli_affiliate_link') {
+      const affiliateUrl = String(text || '').trim();
+      const lower = affiliateUrl.toLowerCase();
+
+      if (
+        !/^https?:\/\//i.test(affiliateUrl) ||
+        !(
+          lower.includes('meli.la') ||
+          lower.includes('mercadolivre.com') ||
+          lower.includes('mercadolibre.com')
+        )
+      ) {
+        return ctx.reply(
+          '⚠️ Esse não parece ser um link do Mercado Livre. Cole o link de afiliada gerado pelo Mercado Livre.'
+        );
+      }
+
+      d.data.product.affiliateLink = affiliateUrl;
+      d.data.link = affiliateUrl;
+
+      await ctx.reply(
+        '✅ Link de afiliada recebido. Vou montar a oferta ✨',
+        Markup.keyboard([[BTN.cancel]]).resize()
+      );
+
+      return finalizeFromProduct(
+        ctx,
+        d.data.product
+      );
+    }
+
     if (d.step === 'wa_phone') {
       try {
         const code = await requestWhatsAppPairingCode(text);
@@ -1087,7 +1118,9 @@ export function startTelegram({ token, adminId }) {
         ]);
 
         return ctx.reply(
-          'Escolha um produto:',
+          platform === 'mercadolivre'
+            ? '🏆 Encontrei produtos entre os mais vendidos relacionados à sua busca. Escolha um:'
+            : 'Escolha um produto:',
           Markup.inlineKeyboard(rows)
         );
       } catch (e) {
@@ -1202,6 +1235,40 @@ export function startTelegram({ token, adminId }) {
       !p.affiliateLink
     ) {
       p.affiliateLink = p.offerLink || p.productLink;
+    }
+
+    if (p.platform === 'mercadolivre') {
+      drafts.set(ctx.from.id, {
+        step: 'meli_affiliate_link',
+        mode: 'search',
+        data: {
+          product: { ...p },
+          id: crypto.randomBytes(3).toString('hex')
+        }
+      });
+
+      const rows = [];
+
+      if (p.canonicalUrl) {
+        rows.push([
+          Markup.button.url(
+            '🛍️ Abrir produto no Mercado Livre',
+            p.canonicalUrl
+          )
+        ]);
+      }
+
+      return ctx.reply(
+        `💛 ${p.name}\n\n` +
+          `Preço encontrado: R$ ${Number(p.price || 0).toFixed(2).replace('.', ',')}\n` +
+          `${p.highlightPosition ? `🏆 Posição entre os mais vendidos: #${p.highlightPosition}\n` : ''}` +
+          `${p.categoryName ? `Categoria: ${p.categoryName}\n` : ''}\n` +
+          'Agora gere o SEU link de afiliada desse produto no Mercado Livre e cole aqui.\n\n' +
+          'Assim a Auri usa a foto, o nome e o preço encontrados pela API, mas envia o link que realmente contabiliza sua comissão.',
+        rows.length
+          ? Markup.inlineKeyboard(rows)
+          : Markup.keyboard([[BTN.cancel]]).resize()
+      );
     }
 
     return finalizeFromProduct(ctx, p);
