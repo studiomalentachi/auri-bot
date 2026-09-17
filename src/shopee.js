@@ -63,14 +63,17 @@ export async function generateShopeeShortLink(originUrl, subIds = []) {
 export async function getShopeeConversions(days = 7) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(1, days) * 86400;
-  const query = `query Conv($start:Int,$end:Int,$limit:Int){
+
+  const query = `query Conv($start:Int64,$end:Int64,$limit:Int){
     conversionReport(purchaseTimeStart:$start,purchaseTimeEnd:$end,limit:$limit){
-      nodes { purchaseTime conversionId totalCommission sellerCommission shopeeCommissionCapped buyerType device utmContent
+      nodes {
+        purchaseTime conversionId totalCommission sellerCommission shopeeCommissionCapped buyerType device utmContent
         orders { orderId orderStatus items { itemId itemName shopName itemPrice qty itemTotalCommission } }
       }
       pageInfo { limit hasNextPage scrollId }
     }
   }`;
+
   const data = await graphql(query, { start, end, limit: 50 });
   return data.conversionReport?.nodes || [];
 }
