@@ -60,7 +60,10 @@ function nextCategories() {
 function normalizePlatform(value, url = '') {
   const s = `${value || ''} ${url || ''}`.toLowerCase();
 
-  if (s.includes('shopee')) return 'shopee';
+  if (
+    s.includes('shopee') ||
+    s.includes('s.shopee.com.br')
+  ) return 'shopee';
   if (s.includes('shein')) return 'shein';
 
   if (
@@ -118,44 +121,48 @@ function parseArray(text) {
   return [];
 }
 
-const MARKETPLACE_TARGETS = [
-  {
-    platform: 'shopee',
-    label: 'Shopee Brasil',
-    domains: ['shopee.com.br']
-  },
-  {
-    platform: 'shein',
-    label: 'SHEIN Brasil',
-    domains: ['br.shein.com', 'shein.com']
-  },
-  {
-    platform: 'mercadolivre',
-    label: 'Mercado Livre Brasil',
-    domains: ['mercadolivre.com.br']
-  }
+const TAVILY_MARKETPLACE_DOMAINS = [
+  'shopee.com.br',
+  'shopee.com.br/product',
+  's.shopee.com.br',
+  'br.shein.com',
+  'shein.com',
+  'mercadolivre.com.br',
+  'produto.mercadolivre.com.br'
 ];
 
-function nextMarketplaceTarget() {
-  const s = readStore();
-  const index = Number(s.discoveryMarketplaceIndex || 0);
-  const target =
-    MARKETPLACE_TARGETS[index % MARKETPLACE_TARGETS.length];
+function platformFromUrl(url) {
+  const s = String(url || '').toLowerCase();
 
-  updateStore((x) => {
-    x.discoveryMarketplaceIndex =
-      (index + 1) % MARKETPLACE_TARGETS.length;
-    return x;
-  });
+  if (
+    s.includes('shopee.com.br') ||
+    s.includes('s.shopee.com.br')
+  ) {
+    return 'shopee';
+  }
 
-  return target;
+  if (
+    s.includes('shein.com') ||
+    s.includes('br.shein.com')
+  ) {
+    return 'shein';
+  }
+
+  if (
+    s.includes('mercadolivre.com.br') ||
+    s.includes('produto.mercadolivre.com.br')
+  ) {
+    return 'mercadolivre';
+  }
+
+  return null;
 }
 
 function parseSourceCount(text, kind) {
   const s = String(text || '');
 
   const soldPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|comprados|pedidos)/i,
+    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|vendido\(s\)|vendido\(a\)|vendidos\(as\)|comprados|pedidos)/i,
     /(?:vendidos|vendido|comprados|pedidos)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
   ];
 
@@ -186,22 +193,30 @@ function parseSourceCount(text, kind) {
       numeric = raw.replace(/(mil|k)$/, '');
     }
 
-    // "1,2 mil" = 1200; "1.234" sem sufixo = 1234.
     if (multiplier === 1000) {
-      numeric = numeric.replace('.', '').replace(',', '.');
+      numeric = numeric
+        .replace(/\./g, '')
+        .replace(',', '.');
     } else if (
       numeric.includes('.') &&
       !numeric.includes(',')
     ) {
       numeric = numeric.replace(/\./g, '');
     } else {
-      numeric = numeric.replace(/\./g, '').replace(',', '.');
+      numeric = numeric
+        .replace(/\./g, '')
+        .replace(',', '.');
     }
 
     const value = Number(numeric);
 
-    if (Number.isFinite(value) && value > 0) {
-      return Math.floor(value * multiplier);
+    if (
+      Number.isFinite(value) &&
+      value > 0
+    ) {
+      return Math.floor(
+        value * multiplier
+      );
     }
   }
 
@@ -210,6 +225,7 @@ function parseSourceCount(text, kind) {
 
 function parseSourcePrice(text) {
   const s = String(text || '');
+
   const match = s.match(
     /R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})|[0-9]+(?:,[0-9]{2})?)/i
   );
@@ -236,12 +252,15 @@ async function webSearchProducts(categories) {
     );
   }
 
-  const target = nextMarketplaceTarget();
   const theme = categories.join(' ou ');
 
+  // Uma única busca consulta os 3 marketplaces.
+  // A ideia é obter URLs candidatas e depois validar cada uma.
   const query =
-    `${theme} produtos ${target.label} Brasil ` +
-    `vendidos avaliações preço promoção`;
+    `${theme} produtos para comprar Brasil ` +
+    `Shopee SHEIN Mercado Livre ` +
+    `vendidos avaliações reviews preço promoção ` +
+    `página do produto`;
 
   const res = await fetch(
     'https://api.tavily.com/search',
@@ -255,16 +274,13 @@ async function webSearchProducts(categories) {
         query,
         topic: 'general',
         search_depth: 'basic',
-        max_results: Math.max(
-          10,
-          Number(config.discoveryMaxPerRun || 6) * 2
-        ),
+        max_results: 15,
         include_answer: false,
         include_raw_content: false,
-        include_images: true,
-        include_image_descriptions: false,
-        include_domains: target.domains,
-        include_domains_mode: 'filter',
+        include_images: false,
+        include_domains:
+          TAVILY_MARKETPLACE_DOMAINS,
+        country: 'brazil',
         include_usage: true,
         safe_search: true
       })
@@ -282,8 +298,7 @@ async function webSearchProducts(categories) {
 
     if (res.status === 429) {
       throw new Error(
-        'A Tavily atingiu o limite temporário de pesquisas. ' +
-        'Aguarde um pouco e tente novamente.'
+        'A Tavily atingiu o limite temporário de pesquisas. Aguarde um pouco e tente novamente.'
       );
     }
 
@@ -292,8 +307,7 @@ async function webSearchProducts(categories) {
       res.status === 433
     ) {
       throw new Error(
-        'A cota da Tavily chegou ao limite do plano. ' +
-        'Confira o painel da Tavily antes de pesquisar novamente.'
+        'A cota da Tavily chegou ao limite do plano. Confira o painel da Tavily.'
       );
     }
 
@@ -314,6 +328,11 @@ async function webSearchProducts(categories) {
       const url =
         String(result?.url || '').trim();
 
+      const platform =
+        platformFromUrl(url);
+
+      if (!platform) return null;
+
       const title =
         String(result?.title || '').trim();
 
@@ -323,28 +342,15 @@ async function webSearchProducts(categories) {
       const sourceText =
         `${title}\n${content}`;
 
-      const resultImages =
-        Array.isArray(result?.images)
-          ? result.images
-          : [];
-
-      const firstImage =
-        resultImages
-          .map((x) =>
-            typeof x === 'string'
-              ? x
-              : x?.url
-          )
-          .find(Boolean) || null;
-
       return {
-        platform: target.platform,
+        platform,
         name: title,
-        price: parseSourcePrice(sourceText),
+        price:
+          parseSourcePrice(sourceText),
         originalPrice: 0,
         discountPct: 0,
         publicLink: url,
-        imageUrl: firstImage,
+        imageUrl: null,
         soldCount:
           parseSourceCount(
             sourceText,
@@ -366,13 +372,21 @@ async function webSearchProducts(categories) {
           Number(result?.score || 0)
       };
     })
+    .filter(Boolean)
     .filter((x) =>
-      /^https?:\/\//i.test(x.publicLink)
+      /^https?:\/\//i.test(
+        x.publicLink
+      )
+    )
+    .sort(
+      (a, b) =>
+        Number(b.tavilyScore || 0) -
+        Number(a.tavilyScore || 0)
     );
 
   if (!rows.length) {
     throw new Error(
-      `A Tavily não encontrou páginas de produto válidas na ${target.label} nesta rodada.`
+      'A Tavily não encontrou resultados úteis nos 3 marketplaces nesta rodada. Tente novamente: a próxima busca usa outros temas.'
     );
   }
 
@@ -403,7 +417,8 @@ function isDirectProductUrl(platform, url) {
   if (platform === 'shopee') {
     return (
       /shopee\.com\.br\/.+-i\.\d+\.\d+/i.test(s) ||
-      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s)
+      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s) ||
+      /shopee\.com\.br\/https-shopee\.com\.br-product-\d+-\d+.*-i\.\d+\.\d+/i.test(s)
     );
   }
 
