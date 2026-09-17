@@ -1,6 +1,11 @@
 import crypto from 'node:crypto';
 import { config } from './config.js';
 import { generateOfferCopy } from './ai.js';
+import {
+  generateShopeeShortLink,
+  isShopeeConfigured,
+  searchShopeeOffers
+} from './shopee.js';
 import { importProductFromUrl } from './marketplaces.js';
 import {
   isDuplicate,
@@ -9,35 +14,22 @@ import {
   updateStore
 } from './store.js';
 
-const MARKETPLACE_DOMAINS = [
-  'shopee.com.br',
-  'mercadolivre.com.br',
-  'mercadolibre.com',
-  'shein.com',
-  'shein.com.br'
-];
-
-function isPlaceholderName(name) {
-  const s = String(name || '').trim().toLowerCase();
-  return (
-    !s ||
-    [
-      'produto',
-      'produto shopee',
-      'produto shein',
-      'produto amazon',
-      'produto mercado livre'
-    ].includes(s)
+const MIN_SALES = () =>
+  Math.max(
+    101,
+    Number(config.discoveryMinSales || 101)
   );
-}
 
 function nextCategories() {
   const s = readStore();
-  const list = config.discoveryKeywords.length
-    ? config.discoveryKeywords
-    : ['achadinhos'];
+  const list =
+    config.discoveryKeywords.length
+      ? config.discoveryKeywords
+      : ['achadinhos'];
 
-  let idx = Number(s.discoveryKeywordIndex || 0);
+  let idx =
+    Number(s.discoveryKeywordIndex || 0);
+
   const picked = [];
 
   for (
@@ -45,148 +37,267 @@ function nextCategories() {
     i < config.discoveryCategoriesPerRun;
     i += 1
   ) {
-    picked.push(list[idx % list.length]);
+    picked.push(
+      list[idx % list.length]
+    );
     idx += 1;
   }
 
   updateStore((x) => {
-    x.discoveryKeywordIndex = idx % list.length;
+    x.discoveryKeywordIndex =
+      idx % list.length;
     return x;
   });
 
   return picked;
 }
 
-function normalizePlatform(value, url = '') {
-  const s = `${value || ''} ${url || ''}`.toLowerCase();
+function countNumber(v) {
+  const n = Number(v || 0);
+
+  return Number.isFinite(n)
+    ? Math.max(0, Math.floor(n))
+    : 0;
+}
+
+function verifiedFacts(product) {
+  const f = [];
+
+  if (product.name) {
+    f.push(
+      `Nome do anúncio: ${product.name}`
+    );
+  }
+
+  if (Number(product.price || 0) > 0) {
+    f.push(
+      `Preço atual confirmado: R$ ${Number(product.price)
+        .toFixed(2)
+        .replace('.', ',')}`
+    );
+  }
 
   if (
-    s.includes('shopee') ||
-    s.includes('s.shopee.com.br')
-  ) return 'shopee';
-  if (s.includes('shein')) return 'shein';
-
-  if (
-    s.includes('mercado livre') ||
-    s.includes('mercadolivre') ||
-    s.includes('mercadolibre') ||
-    s.includes('meli.la')
+    Number(product.originalPrice || 0) >
+    Number(product.price || 0)
   ) {
-    return 'mercadolivre';
+    f.push(
+      `Preço anterior confirmado: R$ ${Number(product.originalPrice)
+        .toFixed(2)
+        .replace('.', ',')}`
+    );
   }
 
-  return 'generic';
-}
-
-function extractOutputText(json) {
-  if (json?.output_text) {
-    return String(json.output_text).trim();
+  if (Number(product.discountPct || 0) > 0) {
+    f.push(
+      `Desconto confirmado: ${Math.round(
+        Number(product.discountPct)
+      )}%`
+    );
   }
 
-  return String(
-    json?.output
-      ?.flatMap((x) => x.content || [])
-      .map((x) => x.text || '')
-      .join('\n') || ''
-  ).trim();
+  if (Number(product.sales || 0) > 0) {
+    f.push(
+      `Vendas confirmadas: ${Number(product.sales)
+        .toLocaleString('pt-BR')}`
+    );
+  }
+
+  if (Number(product.rating || 0) > 0) {
+    f.push(
+      `Nota confirmada: ${Number(product.rating)
+        .toFixed(1)
+        .replace('.', ',')}`
+    );
+  }
+
+  if (product.shopName) {
+    f.push(
+      `Loja confirmada: ${product.shopName}`
+    );
+  }
+
+  return f;
 }
 
-function parseArray(text) {
-  let s = String(text || '')
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
+function scoreProduct(p) {
+  return (
+    Math.log10(
+      Math.max(
+        0,
+        Number(p.sales || 0)
+      ) + 1
+    ) * 100 +
+    Math.max(
+      0,
+      Number(p.rating || 0)
+    ) * 8 +
+    Math.min(
+      Math.max(
+        0,
+        Number(p.discountPct || 0)
+      ),
+      70
+    )
+  );
+}
 
-  try {
-    const parsed = JSON.parse(s);
-    if (Array.isArray(parsed)) return parsed;
-    if (Array.isArray(parsed?.products)) {
-      return parsed.products;
-    }
-  } catch {}
+async function discoverShopee(categories) {
+  if (!isShopeeConfigured()) {
+    return [];
+  }
 
-  const start = s.indexOf('[');
-  const end = s.lastIndexOf(']');
+  const all = [];
+  const seen = new Set();
 
-  if (start >= 0 && end > start) {
+  for (const keyword of categories) {
     try {
-      const parsed = JSON.parse(
-        s.slice(start, end + 1)
+      const found =
+        await searchShopeeOffers(
+          keyword,
+          {
+            limit: 20,
+            sortType: 5
+          }
+        );
+
+      for (const row of found) {
+        const sales =
+          countNumber(row.sales);
+
+        // Mais de 100 vendas = 101 ou mais.
+        if (sales < MIN_SALES()) {
+          continue;
+        }
+
+        if (
+          !row.itemId ||
+          !row.shopId ||
+          !row.productLink ||
+          !row.name ||
+          Number(row.price || 0) <= 0
+        ) {
+          continue;
+        }
+
+        const key =
+          `shopee:${row.shopId}:${row.itemId}`;
+
+        if (
+          seen.has(key) ||
+          isDuplicate(
+            row,
+            row.affiliateLink ||
+            row.productLink
+          )
+        ) {
+          continue;
+        }
+
+        seen.add(key);
+
+        const publicProductLink =
+          String(
+            row.productLink || ''
+          ).trim();
+
+        const offerLink =
+          String(
+            row.affiliateLink || ''
+          ).trim();
+
+        let affiliateLink =
+          offerLink &&
+          offerLink !== publicProductLink
+            ? offerLink
+            : '';
+
+        let affiliateLinkSource =
+          affiliateLink
+            ? 'offerLink'
+            : '';
+
+        try {
+          const generated =
+            String(
+              await generateShopeeShortLink(
+                publicProductLink,
+                [
+                  'whatsapp',
+                  'auri',
+                  keyword
+                    .replace(/\s+/g, '-')
+                    .slice(0, 20)
+                ]
+              ) || ''
+            ).trim();
+
+          // A função pode devolver o link público como fallback.
+          // Nesse caso NÃO tratamos como link de afiliada confirmado.
+          if (
+            generated &&
+            generated !== publicProductLink
+          ) {
+            affiliateLink =
+              generated;
+            affiliateLinkSource =
+              'generateShortLink';
+          }
+        } catch {}
+
+        const product = {
+          ...row,
+          platform: 'shopee',
+          sales,
+          affiliateLink,
+          affiliateLinkVerified:
+            Boolean(
+              affiliateLink &&
+              affiliateLinkSource
+            ),
+          affiliateLinkSource,
+          publicLink:
+            publicProductLink,
+          dataSource:
+            'Shopee Affiliate Open API',
+          salesVerified: true,
+          factsVerified: true,
+          discoveryKeyword:
+            keyword
+        };
+
+        product.verifiedFacts =
+          verifiedFacts(product);
+
+        product.verifiedScore =
+          scoreProduct(product);
+
+        all.push(product);
+      }
+    } catch (e) {
+      console.error(
+        `Shopee ${keyword}:`,
+        e.message
       );
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {}
+    }
   }
 
-  return [];
+  return all;
 }
 
-const TAVILY_TARGETS = [
-  {
-    platform: 'shopee',
-    label: 'Shopee Brasil',
-    domains: ['shopee.com.br'],
-    queries: [
-      (theme) =>
-        `${theme} Shopee Brasil mais vendidos avaliações preço produto`,
-      (theme) =>
-        `${theme} site:shopee.com.br vendidos avaliações produto`
-    ]
-  },
-  {
-    platform: 'shein',
-    label: 'SHEIN Brasil',
-    domains: ['br.shein.com', 'shein.com'],
-    queries: [
-      (theme) =>
-        `${theme} SHEIN Brasil reviews avaliações preço produto`,
-      (theme) =>
-        `${theme} site:br.shein.com reviews comentários produto`
-    ]
-  },
-  {
-    platform: 'mercadolivre',
-    label: 'Mercado Livre Brasil',
-    domains: ['mercadolivre.com.br'],
-    queries: [
-      (theme) =>
-        `${theme} Mercado Livre Brasil mais vendidos avaliações preço produto`,
-      (theme) =>
-        `${theme} site:mercadolivre.com.br vendidos avaliações produto`
-    ]
-  }
-];
-
-function platformFromUrl(url) {
-  const s = String(url || '').toLowerCase();
+function directUrl(platform, url) {
+  const s =
+    String(url || '')
+      .toLowerCase();
 
   if (
-    s.includes('shopee.com.br') ||
-    s.includes('s.shopee.com.br')
-  ) return 'shopee';
-
-  if (
-    s.includes('shein.com') ||
-    s.includes('br.shein.com')
-  ) return 'shein';
-
-  if (
-    s.includes('mercadolivre.com.br') ||
-    s.includes('produto.mercadolivre.com.br')
-  ) return 'mercadolivre';
-
-  return null;
-}
-
-function likelyProductUrl(platform, url) {
-  const s = String(url || '')
-    .toLowerCase()
-    .split('#')[0];
-
-  if (platform === 'shopee') {
+    platform ===
+    'mercadolivre'
+  ) {
     return (
-      /shopee\.com\.br\/.+-i\.\d+\.\d+/i.test(s) ||
-      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s)
+      /mercadolivre\.com\.br\/.+\/p\/mlb\d+/i.test(s) ||
+      /produto\.mercadolivre\.com\.br\/mlb-?\d+/i.test(s) ||
+      /mercadolivre\.com\.br\/mlb-?\d+/i.test(s)
     );
   }
 
@@ -197,306 +308,176 @@ function likelyProductUrl(platform, url) {
     );
   }
 
-  if (platform === 'mercadolivre') {
-    return (
-      /mercadolivre\.com\.br\/.+\/p\/mlb\d+/i.test(s) ||
-      /produto\.mercadolivre\.com\.br\/mlb-?\d+/i.test(s) ||
-      /mercadolivre\.com\.br\/mlb-?\d+/i.test(s)
-    );
-  }
-
   return false;
 }
 
-function parseSourceCount(text, kind) {
-  const s = String(text || '');
+async function tavily(
+  query,
+  domains,
+  maxResults = 18
+) {
+  const key =
+    process.env.TAVILY_API_KEY;
 
-  const soldPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k|m)?)\+?\s*(?:vendidos|vendido|comprados|pedidos|sales|sold|orders)/i,
-    /(?:vendidos|vendido|comprados|pedidos|sales|sold|orders)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k|m)?)/i
-  ];
-
-  const reviewPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k|m)?)\+?\s*(?:avalia[cç][aã]o|avalia[cç][oõ]es|reviews?|ratings?|coment[aá]rios)/i,
-    /(?:avalia[cç][aã]o|avalia[cç][oõ]es|reviews?|ratings?|coment[aá]rios)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k|m)?)/i
-  ];
-
-  const patterns =
-    kind === 'sold'
-      ? soldPatterns
-      : reviewPatterns;
-
-  for (const pattern of patterns) {
-    const match = s.match(pattern);
-    if (!match) continue;
-
-    const raw = String(match[1] || '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, '');
-
-    let multiplier = 1;
-    let numeric = raw;
-
-    if (/(mil|k)$/.test(raw)) {
-      multiplier = 1000;
-      numeric = raw.replace(/(mil|k)$/, '');
-    } else if (/m$/.test(raw)) {
-      multiplier = 1000000;
-      numeric = raw.replace(/m$/, '');
-    }
-
-    if (multiplier > 1) {
-      numeric = numeric.replace(/\./g, '').replace(',', '.');
-    } else if (
-      numeric.includes('.') &&
-      !numeric.includes(',')
-    ) {
-      numeric = numeric.replace(/\./g, '');
-    } else {
-      numeric = numeric.replace(/\./g, '').replace(',', '.');
-    }
-
-    const value = Number(numeric);
-
-    if (
-      Number.isFinite(value) &&
-      value > 0
-    ) {
-      return Math.floor(value * multiplier);
-    }
+  if (!key) {
+    return [];
   }
-
-  return 0;
-}
-
-function parseSourcePrice(text) {
-  const s = String(text || '');
-
-  const match = s.match(
-    /R\$\s*([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2})|[0-9]+(?:,[0-9]{2})?)/i
-  );
-
-  if (!match) return 0;
-
-  const n = Number(
-    match[1]
-      .replace(/\./g, '')
-      .replace(',', '.')
-  );
-
-  return Number.isFinite(n) && n > 0
-    ? n
-    : 0;
-}
-
-async function tavilySearch(query, domains) {
-  const key = process.env.TAVILY_API_KEY;
 
   const res = await fetch(
     'https://api.tavily.com/search',
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json'
+        Authorization:
+          `Bearer ${key}`,
+        'Content-Type':
+          'application/json'
       },
       body: JSON.stringify({
         query,
         topic: 'general',
-        search_depth: 'basic',
-        max_results: 20,
-        include_answer: false,
-        include_raw_content: false,
-        include_images: false,
-        include_domains: domains,
-        country: 'brazil',
-        include_usage: true,
-        safe_search: true
+        search_depth:
+          'basic',
+        max_results:
+          maxResults,
+        include_answer:
+          false,
+        include_raw_content:
+          false,
+        include_images:
+          false,
+        include_domains:
+          domains,
+        country:
+          'brazil',
+        include_usage:
+          true,
+        safe_search:
+          true
       })
     }
   );
 
-  const json = await res.json();
-
-  if (!res.ok) {
-    if (res.status === 429) return [];
-
-    if (
-      res.status === 432 ||
-      res.status === 433
-    ) {
-      throw new Error(
-        'A cota da Tavily chegou ao limite do plano.'
-      );
-    }
-
-    console.error(
-      'Tavily:',
-      json?.detail?.error ||
-      json?.detail ||
-      json?.error ||
-      `HTTP ${res.status}`
+  const json =
+    await res.json().catch(
+      () => ({})
     );
 
+  if (!res.ok) {
     return [];
   }
 
-  return Array.isArray(json?.results)
+  return Array.isArray(
+    json?.results
+  )
     ? json.results
     : [];
 }
 
-function mapTavilyResult(result, target) {
-  const url =
-    String(result?.url || '').trim();
+async function discoverMercadoLivre(
+  categories
+) {
+  const theme =
+    categories
+      .slice(0, 4)
+      .join(' ou ');
 
-  const platform =
-    platformFromUrl(url);
-
-  if (
-    platform !== target.platform ||
-    !likelyProductUrl(platform, url)
-  ) {
-    return null;
-  }
-
-  const title =
-    String(result?.title || '').trim();
-
-  const content =
-    String(result?.content || '').trim();
-
-  const sourceText =
-    `${title}\n${content}`;
-
-  return {
-    platform,
-    name: title,
-    price:
-      parseSourcePrice(sourceText),
-    originalPrice: 0,
-    discountPct: 0,
-    publicLink: url,
-    imageUrl: null,
-    soldCount:
-      parseSourceCount(sourceText, 'sold'),
-    reviewCount:
-      parseSourceCount(sourceText, 'reviews'),
-    salesEvidence: content,
-    couponCode: null,
-    couponVerified: false,
-    reason:
-      `Encontrado pela pesquisa Tavily na ${target.label}.`,
-    sourceVerified: true,
-    sourceSnippet: content,
-    tavilyScore:
-      Number(result?.score || 0)
-  };
-}
-
-async function webSearchProducts(categories) {
-  const key = process.env.TAVILY_API_KEY;
-
-  if (!key) {
-    throw new Error(
-      'TAVILY_API_KEY não configurada no Railway.'
+  const results =
+    await tavily(
+      `${theme} Mercado Livre Brasil mais vendidos produto`,
+      ['mercadolivre.com.br'],
+      18
     );
-  }
 
-  const theme = categories.join(' ou ');
-  const all = [];
-  const debug = {};
-
-  for (const target of TAVILY_TARGETS) {
-    const targetRows = [];
-    let rawCount = 0;
-
-    for (const buildQuery of target.queries) {
-      const results =
-        await tavilySearch(
-          buildQuery(theme),
-          target.domains
-        );
-
-      rawCount += results.length;
-
-      for (const result of results) {
-        const row =
-          mapTavilyResult(
-            result,
-            target
-          );
-
-        if (row) {
-          targetRows.push(row);
-        }
-      }
-
-      // Se a primeira busca já achou bastante, economiza o 2º crédito.
-      if (targetRows.length >= 6) {
-        break;
-      }
-    }
-
-    debug[target.platform] = {
-      raw: rawCount,
-      direct: targetRows.length
-    };
-
-    all.push(...targetRows);
-  }
-
-  const unique = [];
+  const out = [];
   const seen = new Set();
 
-  for (const row of all) {
-    const key =
-      String(row.publicLink || '')
-        .toLowerCase()
-        .replace(/[?#].*$/, '')
-        .replace(/\/$/, '');
+  for (const r of results) {
+    const url =
+      String(r?.url || '')
+        .trim();
 
-    if (!key || seen.has(key)) continue;
-
-    seen.add(key);
-    unique.push(row);
-  }
-
-  unique.sort(
-    (a, b) =>
-      (
-        Number(b.soldCount || 0) * 10 +
-        Number(b.reviewCount || 0) +
-        Number(b.tavilyScore || 0)
-      ) -
-      (
-        Number(a.soldCount || 0) * 10 +
-        Number(a.reviewCount || 0) +
-        Number(a.tavilyScore || 0)
+    if (
+      !directUrl(
+        'mercadolivre',
+        url
       )
-  );
+    ) {
+      continue;
+    }
 
-  if (!unique.length) {
-    const parts =
-      Object.entries(debug)
-        .map(
-          ([name, x]) =>
-            `${name}: ${x.raw} resultados, ${x.direct} links diretos`
+    try {
+      // O URL é descoberto pela Tavily,
+      // mas os dados finais vêm da integração/API do ML.
+      const product =
+        await importProductFromUrl(
+          url
+        );
+
+      if (
+        !product ||
+        product.platform !==
+          'mercadolivre' ||
+        !product.name ||
+        Number(product.price || 0) <=
+          0 ||
+        Number(product.sales || 0) <
+          MIN_SALES() ||
+        !product.canonicalUrl
+      ) {
+        continue;
+      }
+
+      const key =
+        `mercadolivre:${
+          product.itemId ||
+          product.productId ||
+          product.canonicalUrl
+        }`;
+
+      if (
+        seen.has(key) ||
+        isDuplicate(
+          product,
+          product.canonicalUrl
         )
-        .join(' | ');
+      ) {
+        continue;
+      }
 
-    throw new Error(
-      'A pesquisa trouxe resultados, mas nenhum veio como página direta de produto. ' +
-      `Diagnóstico: ${parts}.`
-    );
+      seen.add(key);
+
+      product.publicLink =
+        product.canonicalUrl;
+
+      // Link afiliado do ML continua manual.
+      product.affiliateLink =
+        null;
+
+      product.salesVerified =
+        true;
+
+      product.factsVerified =
+        true;
+
+      product.dataSource =
+        'Mercado Livre API';
+
+      product.verifiedFacts =
+        verifiedFacts(product);
+
+      product.verifiedScore =
+        scoreProduct(product);
+
+      out.push(product);
+    } catch {}
   }
 
-  return unique;
+  return out;
 }
 
-function decodeHtml(value) {
-  return String(value || '')
+function decodeHtml(v) {
+  return String(v || '')
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
@@ -504,584 +485,592 @@ function decodeHtml(value) {
     .replace(/&gt;/gi, '>');
 }
 
+function firstPositive(
+  text,
+  patterns
+) {
+  for (const p of patterns) {
+    const m =
+      String(text || '')
+        .match(p);
 
-function isDirectProductUrl(platform, url) {
-  const s = String(url || '').toLowerCase();
+    if (!m) {
+      continue;
+    }
 
-  if (platform === 'mercadolivre') {
-    return (
-      /mercadolivre\.com\.br\/.+\/p\/mlb\d+/i.test(s) ||
-      /produto\.mercadolivre\.com\.br\/mlb-?\d+/i.test(s) ||
-      /mercadolivre\.com\.br\/mlb-?\d+/i.test(s)
-    );
-  }
+    const n =
+      Number(
+        String(m[1] || '')
+          .replace(/\./g, '')
+          .replace(',', '.')
+      );
 
-  if (platform === 'shopee') {
-    return (
-      /shopee\.com\.br\/.+-i\.\d+\.\d+/i.test(s) ||
-      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s) ||
-      /shopee\.com\.br\/https-shopee\.com\.br-product-\d+-\d+.*-i\.\d+\.\d+/i.test(s)
-    );
-  }
-
-  if (platform === 'shein') {
-    return (
-      /(?:br\.)?shein\.com(?:\.br)?\/.+-p-\d+\.html/i.test(s) ||
-      /(?:br\.)?shein\.com(?:\.br)?\/.+-p-\d+/i.test(s)
-    );
-  }
-
-  return false;
-}
-
-function firstCount(text, patterns) {
-  const src = String(text || '');
-
-  for (const pattern of patterns) {
-    const m = src.match(pattern);
-    if (!m) continue;
-
-    const raw = String(m[1] || '')
-      .trim()
-      .toLowerCase()
-      .replace(/\./g, '')
-      .replace(',', '.');
-
-    const n = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*([km])?/i);
-    if (!n) continue;
-
-    let value = Number(n[1]);
-    if (!Number.isFinite(value)) continue;
-
-    const suffix = String(n[2] || '').toLowerCase();
-    if (suffix === 'k') value *= 1000;
-    if (suffix === 'm') value *= 1000000;
-
-    value = Math.floor(value);
-    if (value > 0) return value;
+    if (
+      Number.isFinite(n) &&
+      n > 0
+    ) {
+      return n;
+    }
   }
 
   return 0;
 }
 
-function extractSalesEvidenceFromHtml(platform, html) {
-  const s = decodeHtml(html);
+async function fetchSheinVerified(
+  url
+) {
+  const controller =
+    new AbortController();
 
-  let soldCount = 0;
-  let reviewCount = 0;
-
-  if (platform === 'mercadolivre') {
-    soldCount = firstCount(s, [
-      /"sold_quantity"\s*:\s*([0-9]+)/i,
-      /([0-9.,]+\s*[km]?)\s+vendidos/i,
-      /([0-9.,]+\s*[km]?)\s+vendido/i
-    ]);
-
-    reviewCount = firstCount(s, [
-      /"reviews_count"\s*:\s*([0-9]+)/i,
-      /"rating_count"\s*:\s*([0-9]+)/i,
-      /([0-9.,]+\s*[km]?)\s+avalia[cç][oõ]es/i
-    ]);
-  }
-
-  if (platform === 'shopee') {
-    soldCount = firstCount(s, [
-      /"historical_sold"\s*:\s*([0-9]+)/i,
-      /"sold"\s*:\s*([0-9]+)/i,
-      /([0-9.,]+\s*[km]?)\s+vendidos/i,
-      /([0-9.,]+\s*[km]?)\s+vendido/i
-    ]);
-
-    reviewCount = firstCount(s, [
-      /"rating_total"\s*:\s*([0-9]+)/i,
-      /"rating_count"\s*:\s*([0-9]+)/i,
-      /"item_rating"\s*:\s*\{[\s\S]{0,300}?"rating_count"\s*:\s*\[?([0-9]+)/i,
-      /([0-9.,]+\s*[km]?)\s+avalia[cç][oõ]es/i
-    ]);
-  }
-
-  if (platform === 'shein') {
-    soldCount = firstCount(s, [
-      /"sale_count"\s*:\s*"?([0-9]+)"?/i,
-      /"sales_count"\s*:\s*"?([0-9]+)"?/i,
-      /"sold_count"\s*:\s*"?([0-9]+)"?/i
-    ]);
-
-    reviewCount = firstCount(s, [
-      /"comment_num"\s*:\s*"?([0-9]+)"?/i,
-      /"review_count"\s*:\s*"?([0-9]+)"?/i,
-      /"reviews_count"\s*:\s*"?([0-9]+)"?/i,
-      /"comment_count"\s*:\s*"?([0-9]+)"?/i
-    ]);
-  }
-
-  return {
-    soldCount,
-    reviewCount
-  };
-}
-
-async function pageMetadata(url, platform) {
-  if (!/^https?:\/\//i.test(String(url || ''))) {
-    return {};
-  }
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      15000
+    );
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      12000
-    );
-
-    const res = await fetch(url, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-          'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-          'Chrome/121.0.0.0 Safari/537.36',
-        Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,' +
-          'image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'pt-BR,pt;q=0.9'
-      }
-    });
-
-    clearTimeout(timer);
-
-    const html = await res.text().catch(() => '');
-    const normalized = decodeHtml(html);
-
-    const meta = (key) => {
-      const a = normalized.match(
-        new RegExp(
-          `<meta[^>]+(?:property|name|itemprop)=["']${key}["'][^>]+content=["']([^"']+)["']`,
-          'i'
-        )
+    const res =
+      await fetch(
+        url,
+        {
+          redirect:
+            'follow',
+          signal:
+            controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36',
+            Accept:
+              'text/html,application/xhtml+xml',
+            'Accept-Language':
+              'pt-BR,pt;q=0.9'
+          }
+        }
       );
 
-      const b = normalized.match(
-        new RegExp(
-          `<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name|itemprop)=["']${key}["']`,
-          'i'
-        )
+    const html =
+      decodeHtml(
+        await res.text()
       );
 
-      return decodeHtml(
-        a?.[1] || b?.[1] || ''
-      );
-    };
+    if (
+      !res.ok ||
+      !directUrl(
+        'shein',
+        res.url || url
+      )
+    ) {
+      return null;
+    }
 
-    let name =
-      meta('og:title') ||
-      meta('twitter:title') ||
-      '';
+    let name = '';
+    let price = 0;
+    let imageUrl = null;
 
-    let imageUrl =
-      meta('og:image') ||
-      meta('twitter:image') ||
-      null;
-
-    let price = Number(
-      meta('product:price:amount') ||
-      meta('price') ||
-      0
-    );
-
-    const ldScripts = [
-      ...normalized.matchAll(
+    const scripts = [
+      ...html.matchAll(
         /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
       )
     ];
 
-    const inspectProduct = (node) => {
-      if (!node) return null;
-
-      if (Array.isArray(node)) {
-        for (const child of node) {
-          const found = inspectProduct(child);
-          if (found) return found;
+    const findProduct =
+      (node) => {
+        if (!node) {
+          return null;
         }
+
+        if (
+          Array.isArray(node)
+        ) {
+          for (
+            const x of node
+          ) {
+            const f =
+              findProduct(x);
+
+            if (f) {
+              return f;
+            }
+          }
+
+          return null;
+        }
+
+        if (
+          typeof node !==
+          'object'
+        ) {
+          return null;
+        }
+
+        if (
+          String(
+            node['@type'] ||
+            ''
+          ).toLowerCase() ===
+          'product'
+        ) {
+          return node;
+        }
+
+        if (node['@graph']) {
+          return findProduct(
+            node['@graph']
+          );
+        }
+
         return null;
-      }
+      };
 
-      if (typeof node !== 'object') {
-        return null;
-      }
-
-      const type = node['@type'];
-
-      if (
-        String(type || '').toLowerCase() === 'product' ||
-        (
-          Array.isArray(type) &&
-          type.some(
-            (x) =>
-              String(x).toLowerCase() === 'product'
-          )
-        )
-      ) {
-        return node;
-      }
-
-      return inspectProduct(node['@graph']);
-    };
-
-    for (const match of ldScripts) {
+    for (
+      const script of
+      scripts
+    ) {
       try {
-        const product = inspectProduct(
-          JSON.parse(match[1].trim())
-        );
+        const p =
+          findProduct(
+            JSON.parse(
+              script[1].trim()
+            )
+          );
 
-        if (!product) continue;
-
-        const offers = Array.isArray(product.offers)
-          ? product.offers[0]
-          : product.offers || {};
-
-        const image = Array.isArray(product.image)
-          ? product.image[0]
-          : product.image;
+        if (!p) {
+          continue;
+        }
 
         name =
-          name ||
-          product.name ||
-          '';
+          String(
+            p.name || ''
+          ).trim();
 
-        imageUrl =
-          imageUrl ||
-          (
-            typeof image === 'string'
-              ? image
-              : image?.url
-          ) ||
-          null;
+        const offers =
+          Array.isArray(
+            p.offers
+          )
+            ? p.offers[0]
+            : p.offers || {};
 
         price =
-          price ||
           Number(
             offers.price ||
             offers.lowPrice ||
-            offers.priceSpecification?.price ||
+            offers
+              ?.priceSpecification
+              ?.price ||
             0
           );
+
+        const image =
+          Array.isArray(
+            p.image
+          )
+            ? p.image[0]
+            : p.image;
+
+        imageUrl =
+          typeof image ===
+          'string'
+            ? image
+            : image?.url ||
+              null;
 
         break;
       } catch {}
     }
 
-    const finalUrl = res.url || url;
-    const evidence = extractSalesEvidenceFromHtml(
-      platform,
-      normalized
-    );
-
-    return {
-      finalUrl,
-      directProduct:
-        isDirectProductUrl(platform, finalUrl),
-      name,
-      imageUrl,
-      price:
-        Number.isFinite(price) && price > 0
-          ? price
-          : 0,
-      soldCount: evidence.soldCount,
-      reviewCount: evidence.reviewCount
-    };
-  } catch {
-    return {};
-  }
-}
-
-
-function countNumber(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, value);
-  }
-
-  const s = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\./g, '')
-    .replace(',', '.');
-
-  if (!s) return 0;
-
-  const m = s.match(/([0-9]+(?:\.[0-9]+)?)\s*([km])?/i);
-  if (!m) return 0;
-
-  let n = Number(m[1]);
-  if (!Number.isFinite(n)) return 0;
-
-  const suffix = String(m[2] || '').toLowerCase();
-  if (suffix === 'k') n *= 1000;
-  if (suffix === 'm') n *= 1000000;
-
-  return Math.floor(n);
-}
-
-async function enrich(row) {
-  const publicLink = String(
-    row.publicLink ||
-    row.link ||
-    row.url ||
-    ''
-  ).trim();
-
-  if (!/^https?:\/\//i.test(publicLink)) {
-    return null;
-  }
-
-  const platform = normalizePlatform(
-    row.platform,
-    publicLink
-  );
-
-  if (!['shopee', 'shein', 'mercadolivre'].includes(platform)) {
-    return null;
-  }
-
-  let apiProduct = null;
-
-  try {
-    apiProduct = await importProductFromUrl(publicLink);
-  } catch {}
-
-  const directCandidate =
-    likelyProductUrl(
-      platform,
-      publicLink
-    );
-
-  const meta =
-    await pageMetadata(
-      publicLink,
-      platform
-    );
-
-  const finalProductUrl =
-    meta.directProduct
-      ? (meta.finalUrl || publicLink)
-      : directCandidate
-        ? publicLink
-        : null;
-
-  if (!finalProductUrl) {
-    return null;
-  }
-
-  const rowName = String(row.name || '').trim();
-  const apiName = String(
-    apiProduct?.name || ''
-  ).trim();
-
-  const name =
-    (
-      apiName &&
-      !isPlaceholderName(apiName)
-        ? apiName
-        : ''
-    ) ||
-    meta.name ||
-    rowName ||
-    '';
-
-  if (!name) {
-    return null;
-  }
-
-  // Preço só entra se a API/página confirmou.
-  const price =
-    Number(apiProduct?.price || 0) ||
-    Number(meta.price || 0) ||
-    (
-      row.sourceVerified
-        ? Number(row.price || 0)
-        : 0
-    ) ||
-    0;
-
-  const originalPrice =
-    Number(apiProduct?.originalPrice || 0) ||
-    0;
-
-  const discountPct =
-    Number(apiProduct?.discountPct || 0) ||
-    (
-      originalPrice > price && price > 0
-        ? (
-            (originalPrice - price) /
-            originalPrice
-          ) * 100
-        : 0
-    );
-
-  // O resultado da IA é apenas candidato.
-  // Vendas/avaliações só valem se vierem da API ou da página aberta.
-  const soldCount = Math.max(
-    countNumber(apiProduct?.sales),
-    countNumber(meta.soldCount),
-    row.sourceVerified
-      ? countNumber(row.soldCount)
-      : 0
-  );
-
-  const reviewCount = Math.max(
-    countNumber(apiProduct?.reviewCount),
-    countNumber(meta.reviewCount),
-    row.sourceVerified
-      ? countNumber(row.reviewCount)
-      : 0
-  );
-
-  // Regra dura: sem qualquer prova CONFIRMADA de venda, descarta.
-  if (soldCount <= 0 && reviewCount <= 0) {
-    return null;
-  }
-
-  return {
-    platform,
-    itemId:
-      apiProduct?.itemId ||
-      null,
-    productId:
-      apiProduct?.productId ||
-      null,
-    name,
-    imageUrl:
-      apiProduct?.imageUrl ||
-      meta.imageUrl ||
-      null,
-    price,
-    originalPrice:
-      originalPrice > price
-        ? originalPrice
-        : 0,
-    discountPct,
-    couponCode:
-      apiProduct?.couponVerified && apiProduct?.couponCode
-        ? String(apiProduct.couponCode)
-        : null,
-    couponVerified:
-      Boolean(
-        apiProduct?.couponVerified &&
-        apiProduct?.couponCode
-      ),
-    canonicalUrl:
-      apiProduct?.canonicalUrl ||
-      finalProductUrl,
-    publicLink:
-      finalProductUrl,
-    affiliateLink: null,
-    rating:
-      Number(apiProduct?.rating || 0),
-    sales: soldCount,
-    reviewCount,
-    salesVerified: true,
-    salesEvidence:
-      soldCount > 0
-        ? `${soldCount.toLocaleString('pt-BR')} vendidos/pedidos encontrados na página, API ou snippet indexado do próprio produto`
-        : `${reviewCount.toLocaleString('pt-BR')} avaliações/reviews encontrados na página, API ou snippet indexado do próprio produto`,
-    score:
-      Math.max(
-        50,
-        Number(apiProduct?.score || 0)
-      ),
-    webReason:
-      soldCount > 0
-        ? `Já teve ${soldCount.toLocaleString('pt-BR')} vendas/pedidos confirmados.`
-        : `Já tem ${reviewCount.toLocaleString('pt-BR')} avaliações/reviews confirmados.`,
-    needsAffiliateLink: true
-  };
-}
-
-function existingKeys() {
-  const s = readStore();
-  const keys = new Set();
-
-  for (const x of s.suggestions || []) {
-    const key = productKey(
-      x.product,
-      x.publicLink || x.link
-    );
-    if (key) keys.add(key);
-  }
-
-  return keys;
-}
-
-export async function discoverWebOffers({
-  force = false
-} = {}) {
-  const s = readStore();
-
-  if (!force && !s.autoDiscovery) {
-    return [];
-  }
-
-  const categories = nextCategories();
-  const raw = await webSearchProducts(categories);
-  const seen = existingKeys();
-  const products = [];
-
-  for (const row of raw) {
-    if (products.length >= config.discoveryMaxPerRun) {
-      break;
+    if (!name) {
+      name =
+        String(
+          html.match(
+            /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
+          )?.[1] || ''
+        ).trim();
     }
 
-    const product = await enrich(row);
+    if (!imageUrl) {
+      imageUrl =
+        html.match(
+          /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+        )?.[1] ||
+        null;
+    }
 
-    if (!product) continue;
+    if (!price) {
+      price =
+        firstPositive(
+          html,
+          [
+            /"salePrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
+            /"retailPrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
+            /"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i
+          ]
+        );
+    }
 
-    const key = productKey(
-      product,
-      product.publicLink
-    );
-
-    if (!key || seen.has(key)) continue;
+    // Avaliação não substitui venda.
+    // Se a página não expõe um contador de vendas/pedidos,
+    // o produto é descartado.
+    const sales =
+      firstPositive(
+        html,
+        [
+          /"sale_count"\s*:\s*"?([0-9]+)"?/i,
+          /"sales_count"\s*:\s*"?([0-9]+)"?/i,
+          /"sold_count"\s*:\s*"?([0-9]+)"?/i,
+          /"order_count"\s*:\s*"?([0-9]+)"?/i,
+          /"soldNum"\s*:\s*"?([0-9]+)"?/i
+        ]
+      );
 
     if (
+      !name ||
+      price <= 0 ||
+      sales < MIN_SALES()
+    ) {
+      return null;
+    }
+
+    const product = {
+      platform:
+        'shein',
+      name,
+      price,
+      originalPrice:
+        0,
+      discountPct:
+        0,
+      sales,
+      rating:
+        0,
+      imageUrl,
+      canonicalUrl:
+        res.url || url,
+      publicLink:
+        res.url || url,
+      affiliateLink:
+        null,
+      salesVerified:
+        true,
+      factsVerified:
+        true,
+      dataSource:
+        'Página oficial SHEIN'
+    };
+
+    product.verifiedFacts =
+      verifiedFacts(product);
+
+    product.verifiedScore =
+      scoreProduct(product);
+
+    return product;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverShein(
+  categories
+) {
+  const theme =
+    categories
+      .slice(0, 4)
+      .join(' ou ');
+
+  const results =
+    await tavily(
+      `${theme} SHEIN Brasil mais vendidos produto`,
+      [
+        'br.shein.com',
+        'shein.com'
+      ],
+      18
+    );
+
+  const out = [];
+  const seen =
+    new Set();
+
+  for (const r of results) {
+    const url =
+      String(r?.url || '')
+        .trim();
+
+    if (
+      !directUrl(
+        'shein',
+        url
+      )
+    ) {
+      continue;
+    }
+
+    const product =
+      await fetchSheinVerified(
+        url
+      );
+
+    if (!product) {
+      continue;
+    }
+
+    const key =
+      product.canonicalUrl
+        .toLowerCase()
+        .replace(/[?#].*$/, '');
+
+    if (
+      seen.has(key) ||
       isDuplicate(
         product,
-        product.publicLink
+        product.canonicalUrl
       )
     ) {
       continue;
     }
 
     seen.add(key);
-    products.push(product);
+    out.push(product);
   }
 
-  products.sort(
+  return out;
+}
+
+function existingKeys() {
+  const s =
+    readStore();
+
+  const set =
+    new Set();
+
+  for (
+    const item of
+    s.suggestions || []
+  ) {
+    const k =
+      productKey(
+        item.product,
+        item.publicLink ||
+        item.link
+      );
+
+    if (k) {
+      set.add(k);
+    }
+  }
+
+  return set;
+}
+
+export async function discoverWebOffers({
+  force = false
+} = {}) {
+  const state =
+    readStore();
+
+  if (
+    !force &&
+    !state.autoDiscovery
+  ) {
+    return [];
+  }
+
+  const categories =
+    nextCategories();
+
+  const [
+    shopee,
+    ml,
+    shein
+  ] =
+    await Promise.all([
+      discoverShopee(
+        categories
+      ),
+      discoverMercadoLivre(
+        categories
+      ).catch(
+        () => []
+      ),
+      discoverShein(
+        categories
+      ).catch(
+        () => []
+      )
+    ]);
+
+  const combined = [
+    ...shopee,
+    ...ml,
+    ...shein
+  ].sort(
     (a, b) =>
-      (Number(b.sales || 0) * 10 + Number(b.reviewCount || 0)) -
-      (Number(a.sales || 0) * 10 + Number(a.reviewCount || 0))
+      Number(
+        b.verifiedScore || 0
+      ) -
+      Number(
+        a.verifiedScore || 0
+      )
   );
+
+  const existing =
+    existingKeys();
+
+  const selected = [];
+  const seen =
+    new Set();
+
+  // Tenta ter variedade de marketplace primeiro.
+  for (
+    const platform of
+    [
+      'shopee',
+      'mercadolivre',
+      'shein'
+    ]
+  ) {
+    const p =
+      combined.find(
+        (x) =>
+          x.platform ===
+            platform &&
+          Number(
+            x.sales || 0
+          ) >= MIN_SALES()
+      );
+
+    if (!p) {
+      continue;
+    }
+
+    const k =
+      productKey(
+        p,
+        p.publicLink ||
+        p.canonicalUrl
+      );
+
+    if (
+      k &&
+      !existing.has(k) &&
+      !seen.has(k)
+    ) {
+      seen.add(k);
+      selected.push(p);
+    }
+  }
+
+  for (
+    const p of
+    combined
+  ) {
+    if (
+      selected.length >=
+      config.discoveryMaxPerRun
+    ) {
+      break;
+    }
+
+    // Última trava: 100 ou menos nunca passa.
+    if (
+      Number(p.sales || 0) <
+      MIN_SALES()
+    ) {
+      continue;
+    }
+
+    if (
+      !p.factsVerified ||
+      !p.name ||
+      Number(p.price || 0) <= 0 ||
+      !(
+        p.publicLink ||
+        p.canonicalUrl
+      )
+    ) {
+      continue;
+    }
+
+    const k =
+      productKey(
+        p,
+        p.publicLink ||
+        p.canonicalUrl
+      );
+
+    if (
+      !k ||
+      existing.has(k) ||
+      seen.has(k) ||
+      isDuplicate(
+        p,
+        p.affiliateLink ||
+        p.publicLink ||
+        p.canonicalUrl
+      )
+    ) {
+      continue;
+    }
+
+    seen.add(k);
+    selected.push(p);
+  }
 
   const suggestions = [];
 
-  for (const product of products) {
-    const copy = await generateOfferCopy(
-      product,
-      `Encontrado automaticamente pela pesquisa web da Auri. Temas: ${categories.join(', ')}. Produto com prova de venda: ${product.salesEvidence}. O link atual é público; antes de ir para a fila a usuária fornecerá o link de afiliada.`
-    );
+  for (
+    const product of
+    selected
+  ) {
+    const copy =
+      await generateOfferCopy(
+        product,
+        'Use somente verifiedFacts e campos confirmados. Não acrescente características, benefícios, materiais, tamanhos, cores, fragrâncias ou usos não confirmados.'
+      );
+
+    const hasAffiliate =
+      Boolean(
+        String(
+          product.affiliateLink ||
+          ''
+        ).trim()
+      );
 
     suggestions.push({
-      id: crypto.randomBytes(4).toString('hex'),
-      text: copy.text,
-      link: product.publicLink,
-      publicLink: product.publicLink,
-      photoPath: null,
+      id:
+        crypto.randomBytes(4)
+          .toString('hex'),
+      text:
+        copy.text,
+      link:
+        hasAffiliate
+          ? product.affiliateLink
+          : product.publicLink ||
+            product.canonicalUrl,
+      publicLink:
+        product.publicLink ||
+        product.canonicalUrl,
+      photoPath:
+        null,
       product,
-      needsAffiliateLink: true,
-      aiGenerated: true,
-      aiProvider: copy.provider,
-      source: 'web-discovery',
-      keyword: categories.join(', '),
-      createdAt: new Date().toISOString()
+      needsAffiliateLink:
+        !hasAffiliate,
+      aiGenerated:
+        true,
+      aiProvider:
+        copy.provider,
+      source:
+        product.platform ===
+        'shopee'
+          ? 'shopee-affiliate-api'
+          : 'verified-discovery',
+      keyword:
+        categories.join(', '),
+      createdAt:
+        new Date().toISOString()
     });
   }
 
@@ -1097,7 +1086,8 @@ export async function discoverWebOffers({
     x.lastDiscoveryAt =
       new Date().toISOString();
 
-    x.metrics.discoveryRuns += 1;
+    x.metrics.discoveryRuns +=
+      1;
 
     return x;
   });
@@ -1105,5 +1095,5 @@ export async function discoverWebOffers({
   return suggestions;
 }
 
-// Compatibilidade com os imports antigos enquanto atualizamos a Auri.
-export const discoverShopeeOffers = discoverWebOffers;
+export const discoverShopeeOffers =
+  discoverWebOffers;

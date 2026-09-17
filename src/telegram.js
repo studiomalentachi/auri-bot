@@ -571,6 +571,17 @@ async function renderApprovalCard(ctx, item) {
       crypto.randomBytes(4).toString('hex')
     );
 
+  const automaticAffiliateLink =
+    String(
+      item.product?.affiliateLink ||
+      ''
+    ).trim();
+
+  const hasAutomaticAffiliateLink =
+    item.product?.platform === 'shopee' &&
+    item.product?.affiliateLinkVerified === true &&
+    Boolean(automaticAffiliateLink);
+
   const data = {
     ...item,
     id,
@@ -579,10 +590,15 @@ async function renderApprovalCard(ctx, item) {
       id,
     publicLink,
     link:
-      item.product?.affiliateLink ||
-      '',
+      hasAutomaticAffiliateLink
+        ? automaticAffiliateLink
+        : '',
     product: {
-      ...product
+      ...product,
+      affiliateLink:
+        hasAutomaticAffiliateLink
+          ? automaticAffiliateLink
+          : product.affiliateLink
     }
   };
 
@@ -674,18 +690,38 @@ async function renderApprovalCard(ctx, item) {
   if (publicLink) {
     rows.push([
       Markup.button.url(
-        '🔎 Abrir produto',
+        '🔎 Abrir produto normal',
         publicLink
       )
     ]);
   }
 
-  rows.push([
-    Markup.button.callback(
-      '🔗 Colocar meu link de afiliada',
-      `aff:${id}`
-    )
-  ]);
+  if (hasAutomaticAffiliateLink) {
+    rows.push([
+      Markup.button.url(
+        '💸 Conferir link de afiliada',
+        automaticAffiliateLink
+      )
+    ]);
+
+    rows.push([
+      Markup.button.callback(
+        '✅ Usar link automático',
+        `affauto:${id}`
+      ),
+      Markup.button.callback(
+        '🔗 Substituir pelo meu link',
+        `aff:${id}`
+      )
+    ]);
+  } else {
+    rows.push([
+      Markup.button.callback(
+        '🔗 Colocar meu link de afiliada',
+        `aff:${id}`
+      )
+    ]);
+  }
 
   rows.push([
     Markup.button.callback(
@@ -730,7 +766,19 @@ async function renderApprovalCard(ctx, item) {
       `${facts.length ? `\n${facts.join('\n')}\n` : ''}` +
       `\n✍️ TEXTO PRONTO\n\n${data.text || ''}\n\n` +
       `🔗 Link público confirmado:\n${publicLink || 'não disponível'}\n\n` +
-      `⏳ Link de afiliada: ainda não colocado`,
+      (
+        hasAutomaticAffiliateLink
+          ? (
+              `✅ Link de afiliada recebido da Shopee Affiliate Open API\n` +
+              `Origem: ${
+                product.affiliateLinkSource === 'generateShortLink'
+                  ? 'generateShortLink'
+                  : 'offerLink'
+              }\n` +
+              `Você pode abrir o link antes de usar ou substituí-lo pelo seu.`
+            )
+          : `⏳ Link de afiliada: ainda não confirmado`
+      ),
     Markup.inlineKeyboard(rows)
   );
 }
@@ -795,7 +843,7 @@ async function showDiscovery(ctx) {
       `Rodada: até ${config.discoveryMaxPerRun} produtos\n` +
       `Intervalo: ${config.discoveryEveryMinutes} min\n` +
       `Meta de envio: até 85/dia (08:00–22:00, a cada 10 min)\n\n` +
-      `🔐 Nada entra na fila com link público. Você escolhe a sugestão, cola o seu link de afiliada e só então aprova.`,
+      `🔐 Shopee: quando a Affiliate Open API devolver um link de afiliada confirmado, você pode abrir esse link, conferir e só depois usar. Se preferir, pode substituí-lo pelo seu próprio link. SHEIN e Mercado Livre continuam pedindo o seu link de afiliada.`,
     Markup.inlineKeyboard([
       [
         Markup.button.callback(
@@ -994,7 +1042,13 @@ export function startTelegram({ token, adminId }) {
 
         const waitingAffiliate =
           d.mode === 'suggestion-review' &&
-          !d.data.product?.affiliateLink;
+          !(
+            d.data.product?.affiliateLink ||
+            (
+              d.data.product?.platform === 'shopee' &&
+              d.data.link
+            )
+          );
 
         d.step = waitingAffiliate
           ? 'suggestion_review'
@@ -1470,7 +1524,13 @@ export function startTelegram({ token, adminId }) {
 
       const waitingAffiliate =
         d.mode === 'suggestion-review' &&
-        !d.data.product?.affiliateLink;
+        !(
+          d.data.product?.affiliateLink ||
+          (
+            d.data.product?.platform === 'shopee' &&
+            d.data.link
+          )
+        );
 
       d.step = waitingAffiliate
         ? 'suggestion_review'
@@ -1509,7 +1569,13 @@ export function startTelegram({ token, adminId }) {
 
       const waitingAffiliate =
         d.mode === 'suggestion-review' &&
-        !d.data.product?.affiliateLink;
+        !(
+          d.data.product?.affiliateLink ||
+          (
+            d.data.product?.platform === 'shopee' &&
+            d.data.link
+          )
+        );
 
       d.step = waitingAffiliate
         ? 'suggestion_review'
@@ -1548,7 +1614,13 @@ export function startTelegram({ token, adminId }) {
 
       const waitingAffiliate =
         d.mode === 'suggestion-review' &&
-        !d.data.product?.affiliateLink;
+        !(
+          d.data.product?.affiliateLink ||
+          (
+            d.data.product?.platform === 'shopee' &&
+            d.data.link
+          )
+        );
 
       d.step = waitingAffiliate
         ? 'suggestion_review'
@@ -1722,6 +1794,72 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^affauto:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = String(ctx.match[1]);
+
+    if (
+      !d ||
+      String(d.data.id) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    const product =
+      d.data.product || {};
+
+    const affiliateUrl =
+      String(
+        product.affiliateLink || ''
+      ).trim();
+
+    const verified =
+      product.platform === 'shopee' &&
+      product.affiliateLinkVerified === true &&
+      Boolean(affiliateUrl);
+
+    if (!verified) {
+      return ctx.answerCbQuery(
+        'Esse link automático não está confirmado. Use o seu link.'
+      );
+    }
+
+    const draft = {
+      step: 'confirm',
+      mode: 'suggestion',
+      data: {
+        ...d.data,
+        id,
+        link: affiliateUrl,
+        product,
+        suggestionId:
+          d.data.suggestionId ||
+          id
+      }
+    };
+
+    drafts.set(
+      ctx.from.id,
+      draft
+    );
+
+    await ctx.answerCbQuery(
+      'Link automático selecionado'
+    );
+
+    await ctx.reply(
+      '✅ Link automático selecionado. Confira a PRÉVIA FINAL antes de salvar na fila:',
+      Markup.removeKeyboard()
+    );
+
+    return previewOffer(
+      ctx,
+      draft
+    );
+  });
+
   bot.action(/^aff:(.+)$/, async (ctx) => {
     const d = drafts.get(ctx.from.id);
     const id = String(ctx.match[1]);
@@ -1744,7 +1882,9 @@ export function startTelegram({ token, adminId }) {
 
     return ctx.reply(
       '🔗 Agora cole o SEU link de afiliada deste mesmo produto.\n\n' +
-        'A Auri não vai trocar os dados do produto; ela só vai substituir o link público pelo seu link de afiliada e mostrar a prévia final.',
+        'Se for Shopee, pode gerar/copiar pelo seu próprio painel para conferir. ' +
+        'A Auri vai substituir somente o link e manter os dados reais do anúncio. ' +
+        'Depois ela mostra a prévia final antes de salvar na fila.',
       Markup.keyboard([[BTN.cancel]]).resize()
     );
   });
@@ -1951,7 +2091,13 @@ export function startTelegram({ token, adminId }) {
 
     const waitingAffiliate =
       d.mode === 'suggestion-review' &&
-      !d.data.product?.affiliateLink;
+      !(
+        d.data.product?.affiliateLink ||
+        (
+          d.data.product?.platform === 'shopee' &&
+          d.data.link
+        )
+      );
 
     if (waitingAffiliate) {
       d.step = 'suggestion_review';
