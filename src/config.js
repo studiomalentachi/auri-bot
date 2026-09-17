@@ -33,15 +33,15 @@ export const config = {
     envInt('GROUP_DELAY_MAX_SECONDS', 120)
   ),
 
-  // Pesquisa em lotes. 12 por rodada x até 8 rodadas/dia
-  // = até 96 candidatas antes de deduplicar/filtrar.
+  // Pesquisa em 3 marketplaces por rodada. Até 18 aprováveis por rodada.
+  // A cada 2h: 8 rodadas/dia. Sobra margem para abastecer a meta de 85.
   discoveryEveryMinutes: Math.max(
     60,
-    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 60)
+    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)
   ),
   discoveryMaxPerRun: Math.max(
     3,
-    envInt('AUTO_DISCOVERY_MAX_PER_RUN', 6)
+    envInt('AUTO_DISCOVERY_MAX_PER_RUN', 18)
   ),
   discoveryDailyTarget: Math.max(
     1,

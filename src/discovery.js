@@ -121,14 +121,25 @@ function parseArray(text) {
   return [];
 }
 
-const TAVILY_MARKETPLACE_DOMAINS = [
-  'shopee.com.br',
-  'shopee.com.br/product',
-  's.shopee.com.br',
-  'br.shein.com',
-  'shein.com',
-  'mercadolivre.com.br',
-  'produto.mercadolivre.com.br'
+const TAVILY_TARGETS = [
+  {
+    platform: 'shopee',
+    label: 'Shopee Brasil',
+    domains: ['shopee.com.br'],
+    salesWords: 'vendidos avaliações'
+  },
+  {
+    platform: 'shein',
+    label: 'SHEIN Brasil',
+    domains: ['br.shein.com', 'shein.com'],
+    salesWords: 'reviews avaliações comentários'
+  },
+  {
+    platform: 'mercadolivre',
+    label: 'Mercado Livre Brasil',
+    domains: ['mercadolivre.com.br'],
+    salesWords: 'vendidos avaliações'
+  }
 ];
 
 function platformFromUrl(url) {
@@ -162,7 +173,7 @@ function parseSourceCount(text, kind) {
   const s = String(text || '');
 
   const soldPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|vendido\(s\)|vendido\(a\)|vendidos\(as\)|comprados|pedidos)/i,
+    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|comprados|pedidos)/i,
     /(?:vendidos|vendido|comprados|pedidos)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
   ];
 
@@ -243,24 +254,15 @@ function parseSourcePrice(text) {
     : 0;
 }
 
-async function webSearchProducts(categories) {
+async function tavilySearchTarget(target, categories) {
   const key = process.env.TAVILY_API_KEY;
-
-  if (!key) {
-    throw new Error(
-      'TAVILY_API_KEY não configurada no Railway.'
-    );
-  }
 
   const theme = categories.join(' ou ');
 
-  // Uma única busca consulta os 3 marketplaces.
-  // A ideia é obter URLs candidatas e depois validar cada uma.
   const query =
-    `${theme} produtos para comprar Brasil ` +
-    `Shopee SHEIN Mercado Livre ` +
-    `vendidos avaliações reviews preço promoção ` +
-    `página do produto`;
+    `${theme} ${target.label} Brasil ` +
+    `${target.salesWords} preço promoção ` +
+    `produto comprar`;
 
   const res = await fetch(
     'https://api.tavily.com/search',
@@ -274,12 +276,11 @@ async function webSearchProducts(categories) {
         query,
         topic: 'general',
         search_depth: 'basic',
-        max_results: 15,
+        max_results: 10,
         include_answer: false,
         include_raw_content: false,
         include_images: false,
-        include_domains:
-          TAVILY_MARKETPLACE_DOMAINS,
+        include_domains: target.domains,
         country: 'brazil',
         include_usage: true,
         safe_search: true
@@ -297,9 +298,7 @@ async function webSearchProducts(categories) {
       `Tavily HTTP ${res.status}`;
 
     if (res.status === 429) {
-      throw new Error(
-        'A Tavily atingiu o limite temporário de pesquisas. Aguarde um pouco e tente novamente.'
-      );
+      return [];
     }
 
     if (
@@ -311,11 +310,14 @@ async function webSearchProducts(categories) {
       );
     }
 
-    throw new Error(
+    console.error(
+      `Pesquisa Tavily ${target.label}:`,
       typeof raw === 'string'
         ? raw
         : JSON.stringify(raw)
     );
+
+    return [];
   }
 
   const results =
@@ -323,7 +325,7 @@ async function webSearchProducts(categories) {
       ? json.results
       : [];
 
-  const rows = results
+  return results
     .map((result) => {
       const url =
         String(result?.url || '').trim();
@@ -331,7 +333,9 @@ async function webSearchProducts(categories) {
       const platform =
         platformFromUrl(url);
 
-      if (!platform) return null;
+      if (platform !== target.platform) {
+        return null;
+      }
 
       const title =
         String(result?.title || '').trim();
@@ -365,7 +369,7 @@ async function webSearchProducts(categories) {
         couponCode: null,
         couponVerified: false,
         reason:
-          'Encontrado diretamente pela pesquisa Tavily.',
+          `Encontrado diretamente pela pesquisa Tavily na ${target.label}.`,
         sourceVerified: true,
         sourceSnippet: content,
         tavilyScore:
@@ -377,20 +381,70 @@ async function webSearchProducts(categories) {
       /^https?:\/\//i.test(
         x.publicLink
       )
-    )
-    .sort(
-      (a, b) =>
-        Number(b.tavilyScore || 0) -
-        Number(a.tavilyScore || 0)
     );
+}
 
-  if (!rows.length) {
+async function webSearchProducts(categories) {
+  const key = process.env.TAVILY_API_KEY;
+
+  if (!key) {
     throw new Error(
-      'A Tavily não encontrou resultados úteis nos 3 marketplaces nesta rodada. Tente novamente: a próxima busca usa outros temas.'
+      'TAVILY_API_KEY não configurada no Railway.'
     );
   }
 
-  return rows;
+  const all = [];
+
+  // Faz uma pesquisa específica em cada marketplace.
+  // É bem mais confiável do que uma busca genérica misturando os três.
+  for (const target of TAVILY_TARGETS) {
+    try {
+      const rows =
+        await tavilySearchTarget(
+          target,
+          categories
+        );
+
+      all.push(...rows);
+    } catch (e) {
+      console.error(
+        `Busca ${target.label}:`,
+        e.message
+      );
+    }
+  }
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const row of all) {
+    const key =
+      String(row.publicLink || '')
+        .toLowerCase()
+        .replace(/[?#].*$/, '')
+        .replace(/\/$/, '');
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    unique.push(row);
+  }
+
+  unique.sort(
+    (a, b) =>
+      Number(b.tavilyScore || 0) -
+      Number(a.tavilyScore || 0)
+  );
+
+  if (!unique.length) {
+    throw new Error(
+      'A Tavily pesquisou Shopee, SHEIN e Mercado Livre, mas não encontrou páginas de produto aproveitáveis nesta rodada. Tente novamente com outros temas.'
+    );
+  }
+
+  return unique;
 }
 
 function decodeHtml(value) {
