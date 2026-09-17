@@ -63,18 +63,53 @@ export async function generateShopeeShortLink(originUrl, subIds = []) {
 export async function getShopeeConversions(days = 7) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(1, days) * 86400;
+  const limit = 50;
 
-  const query = `query Conv($start:Int64,$end:Int64,$limit:Int){
-    conversionReport(purchaseTimeStart:$start,purchaseTimeEnd:$end,limit:$limit){
+  // IMPORTANTE:
+  // A API brasileira apresentou conflito no scalar dos timestamps quando
+  // enviados como variáveis GraphQL (Int vs Int64 / "wrong type").
+  // A documentação/exemplos oficiais usam os timestamps diretamente
+  // nos argumentos da query. Fazemos o mesmo aqui.
+  //
+  // start/end/limit são calculados internamente como inteiros, então
+  // não existe entrada do usuário sendo interpolada nesta query.
+  const query = `query {
+    conversionReport(
+      purchaseTimeStart: ${start}
+      purchaseTimeEnd: ${end}
+      limit: ${limit}
+    ) {
       nodes {
-        purchaseTime conversionId totalCommission sellerCommission shopeeCommissionCapped buyerType device utmContent
-        orders { orderId orderStatus items { itemId itemName shopName itemPrice qty itemTotalCommission } }
+        purchaseTime
+        conversionId
+        totalCommission
+        sellerCommission
+        shopeeCommissionCapped
+        buyerType
+        device
+        utmContent
+        orders {
+          orderId
+          orderStatus
+          items {
+            itemId
+            itemName
+            shopName
+            itemPrice
+            qty
+            itemTotalCommission
+          }
+        }
       }
-      pageInfo { limit hasNextPage scrollId }
+      pageInfo {
+        limit
+        hasNextPage
+        scrollId
+      }
     }
   }`;
 
-  const data = await graphql(query, { start, end, limit: 50 });
+  const data = await graphql(query);
   return data.conversionReport?.nodes || [];
 }
 
