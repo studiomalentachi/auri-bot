@@ -37,7 +37,7 @@ export const config = {
   // A cada 2h: 8 rodadas/dia. Sobra margem para abastecer a meta de 85.
   discoveryEveryMinutes: Math.max(
     60,
-    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)
+    envInt('AUTO_DISCOVERY_EVERY_MINUTES', 180)
   ),
   discoveryMaxPerRun: Math.max(
     3,

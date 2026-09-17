@@ -126,19 +126,34 @@ const TAVILY_TARGETS = [
     platform: 'shopee',
     label: 'Shopee Brasil',
     domains: ['shopee.com.br'],
-    salesWords: 'vendidos avaliações'
+    queries: [
+      (theme) =>
+        `${theme} Shopee Brasil mais vendidos avaliações preço produto`,
+      (theme) =>
+        `${theme} site:shopee.com.br vendidos avaliações produto`
+    ]
   },
   {
     platform: 'shein',
     label: 'SHEIN Brasil',
     domains: ['br.shein.com', 'shein.com'],
-    salesWords: 'reviews avaliações comentários'
+    queries: [
+      (theme) =>
+        `${theme} SHEIN Brasil reviews avaliações preço produto`,
+      (theme) =>
+        `${theme} site:br.shein.com reviews comentários produto`
+    ]
   },
   {
     platform: 'mercadolivre',
     label: 'Mercado Livre Brasil',
     domains: ['mercadolivre.com.br'],
-    salesWords: 'vendidos avaliações'
+    queries: [
+      (theme) =>
+        `${theme} Mercado Livre Brasil mais vendidos avaliações preço produto`,
+      (theme) =>
+        `${theme} site:mercadolivre.com.br vendidos avaliações produto`
+    ]
   }
 ];
 
@@ -148,38 +163,62 @@ function platformFromUrl(url) {
   if (
     s.includes('shopee.com.br') ||
     s.includes('s.shopee.com.br')
-  ) {
-    return 'shopee';
-  }
+  ) return 'shopee';
 
   if (
     s.includes('shein.com') ||
     s.includes('br.shein.com')
-  ) {
-    return 'shein';
-  }
+  ) return 'shein';
 
   if (
     s.includes('mercadolivre.com.br') ||
     s.includes('produto.mercadolivre.com.br')
-  ) {
-    return 'mercadolivre';
-  }
+  ) return 'mercadolivre';
 
   return null;
+}
+
+function likelyProductUrl(platform, url) {
+  const s = String(url || '')
+    .toLowerCase()
+    .split('#')[0];
+
+  if (platform === 'shopee') {
+    return (
+      /shopee\.com\.br\/.+-i\.\d+\.\d+/i.test(s) ||
+      /shopee\.com\.br\/product\/\d+\/\d+/i.test(s)
+    );
+  }
+
+  if (platform === 'shein') {
+    return (
+      /(?:br\.)?shein\.com\/.+-p-\d+(?:\.html)?/i.test(s) ||
+      /shein\.com\.br\/.+-p-\d+(?:\.html)?/i.test(s)
+    );
+  }
+
+  if (platform === 'mercadolivre') {
+    return (
+      /mercadolivre\.com\.br\/.+\/p\/mlb\d+/i.test(s) ||
+      /produto\.mercadolivre\.com\.br\/mlb-?\d+/i.test(s) ||
+      /mercadolivre\.com\.br\/mlb-?\d+/i.test(s)
+    );
+  }
+
+  return false;
 }
 
 function parseSourceCount(text, kind) {
   const s = String(text || '');
 
   const soldPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:vendidos|vendido|comprados|pedidos)/i,
-    /(?:vendidos|vendido|comprados|pedidos)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
+    /([0-9][0-9.,]*\s*(?:mil|k|m)?)\+?\s*(?:vendidos|vendido|comprados|pedidos|sales|sold|orders)/i,
+    /(?:vendidos|vendido|comprados|pedidos|sales|sold|orders)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k|m)?)/i
   ];
 
   const reviewPatterns = [
-    /([0-9][0-9.,]*\s*(?:mil|k)?)\+?\s*(?:avalia[cç][oõ]es|reviews|coment[aá]rios)/i,
-    /(?:avalia[cç][oõ]es|reviews|coment[aá]rios)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k)?)/i
+    /([0-9][0-9.,]*\s*(?:mil|k|m)?)\+?\s*(?:avalia[cç][aã]o|avalia[cç][oõ]es|reviews?|ratings?|coment[aá]rios)/i,
+    /(?:avalia[cç][aã]o|avalia[cç][oõ]es|reviews?|ratings?|coment[aá]rios)\s*[:\-]?\s*([0-9][0-9.,]*\s*(?:mil|k|m)?)/i
   ];
 
   const patterns =
@@ -202,21 +241,20 @@ function parseSourceCount(text, kind) {
     if (/(mil|k)$/.test(raw)) {
       multiplier = 1000;
       numeric = raw.replace(/(mil|k)$/, '');
+    } else if (/m$/.test(raw)) {
+      multiplier = 1000000;
+      numeric = raw.replace(/m$/, '');
     }
 
-    if (multiplier === 1000) {
-      numeric = numeric
-        .replace(/\./g, '')
-        .replace(',', '.');
+    if (multiplier > 1) {
+      numeric = numeric.replace(/\./g, '').replace(',', '.');
     } else if (
       numeric.includes('.') &&
       !numeric.includes(',')
     ) {
       numeric = numeric.replace(/\./g, '');
     } else {
-      numeric = numeric
-        .replace(/\./g, '')
-        .replace(',', '.');
+      numeric = numeric.replace(/\./g, '').replace(',', '.');
     }
 
     const value = Number(numeric);
@@ -225,9 +263,7 @@ function parseSourceCount(text, kind) {
       Number.isFinite(value) &&
       value > 0
     ) {
-      return Math.floor(
-        value * multiplier
-      );
+      return Math.floor(value * multiplier);
     }
   }
 
@@ -254,15 +290,8 @@ function parseSourcePrice(text) {
     : 0;
 }
 
-async function tavilySearchTarget(target, categories) {
+async function tavilySearch(query, domains) {
   const key = process.env.TAVILY_API_KEY;
-
-  const theme = categories.join(' ou ');
-
-  const query =
-    `${theme} ${target.label} Brasil ` +
-    `${target.salesWords} preço promoção ` +
-    `produto comprar`;
 
   const res = await fetch(
     'https://api.tavily.com/search',
@@ -276,11 +305,11 @@ async function tavilySearchTarget(target, categories) {
         query,
         topic: 'general',
         search_depth: 'basic',
-        max_results: 10,
+        max_results: 20,
         include_answer: false,
         include_raw_content: false,
         include_images: false,
-        include_domains: target.domains,
+        include_domains: domains,
         country: 'brazil',
         include_usage: true,
         safe_search: true
@@ -291,97 +320,79 @@ async function tavilySearchTarget(target, categories) {
   const json = await res.json();
 
   if (!res.ok) {
-    const raw =
-      json?.detail?.error ||
-      json?.detail ||
-      json?.error ||
-      `Tavily HTTP ${res.status}`;
-
-    if (res.status === 429) {
-      return [];
-    }
+    if (res.status === 429) return [];
 
     if (
       res.status === 432 ||
       res.status === 433
     ) {
       throw new Error(
-        'A cota da Tavily chegou ao limite do plano. Confira o painel da Tavily.'
+        'A cota da Tavily chegou ao limite do plano.'
       );
     }
 
     console.error(
-      `Pesquisa Tavily ${target.label}:`,
-      typeof raw === 'string'
-        ? raw
-        : JSON.stringify(raw)
+      'Tavily:',
+      json?.detail?.error ||
+      json?.detail ||
+      json?.error ||
+      `HTTP ${res.status}`
     );
 
     return [];
   }
 
-  const results =
-    Array.isArray(json?.results)
-      ? json.results
-      : [];
+  return Array.isArray(json?.results)
+    ? json.results
+    : [];
+}
 
-  return results
-    .map((result) => {
-      const url =
-        String(result?.url || '').trim();
+function mapTavilyResult(result, target) {
+  const url =
+    String(result?.url || '').trim();
 
-      const platform =
-        platformFromUrl(url);
+  const platform =
+    platformFromUrl(url);
 
-      if (platform !== target.platform) {
-        return null;
-      }
+  if (
+    platform !== target.platform ||
+    !likelyProductUrl(platform, url)
+  ) {
+    return null;
+  }
 
-      const title =
-        String(result?.title || '').trim();
+  const title =
+    String(result?.title || '').trim();
 
-      const content =
-        String(result?.content || '').trim();
+  const content =
+    String(result?.content || '').trim();
 
-      const sourceText =
-        `${title}\n${content}`;
+  const sourceText =
+    `${title}\n${content}`;
 
-      return {
-        platform,
-        name: title,
-        price:
-          parseSourcePrice(sourceText),
-        originalPrice: 0,
-        discountPct: 0,
-        publicLink: url,
-        imageUrl: null,
-        soldCount:
-          parseSourceCount(
-            sourceText,
-            'sold'
-          ),
-        reviewCount:
-          parseSourceCount(
-            sourceText,
-            'reviews'
-          ),
-        salesEvidence: content,
-        couponCode: null,
-        couponVerified: false,
-        reason:
-          `Encontrado diretamente pela pesquisa Tavily na ${target.label}.`,
-        sourceVerified: true,
-        sourceSnippet: content,
-        tavilyScore:
-          Number(result?.score || 0)
-      };
-    })
-    .filter(Boolean)
-    .filter((x) =>
-      /^https?:\/\//i.test(
-        x.publicLink
-      )
-    );
+  return {
+    platform,
+    name: title,
+    price:
+      parseSourcePrice(sourceText),
+    originalPrice: 0,
+    discountPct: 0,
+    publicLink: url,
+    imageUrl: null,
+    soldCount:
+      parseSourceCount(sourceText, 'sold'),
+    reviewCount:
+      parseSourceCount(sourceText, 'reviews'),
+    salesEvidence: content,
+    couponCode: null,
+    couponVerified: false,
+    reason:
+      `Encontrado pela pesquisa Tavily na ${target.label}.`,
+    sourceVerified: true,
+    sourceSnippet: content,
+    tavilyScore:
+      Number(result?.score || 0)
+  };
 }
 
 async function webSearchProducts(categories) {
@@ -393,25 +404,47 @@ async function webSearchProducts(categories) {
     );
   }
 
+  const theme = categories.join(' ou ');
   const all = [];
+  const debug = {};
 
-  // Faz uma pesquisa específica em cada marketplace.
-  // É bem mais confiável do que uma busca genérica misturando os três.
   for (const target of TAVILY_TARGETS) {
-    try {
-      const rows =
-        await tavilySearchTarget(
-          target,
-          categories
+    const targetRows = [];
+    let rawCount = 0;
+
+    for (const buildQuery of target.queries) {
+      const results =
+        await tavilySearch(
+          buildQuery(theme),
+          target.domains
         );
 
-      all.push(...rows);
-    } catch (e) {
-      console.error(
-        `Busca ${target.label}:`,
-        e.message
-      );
+      rawCount += results.length;
+
+      for (const result of results) {
+        const row =
+          mapTavilyResult(
+            result,
+            target
+          );
+
+        if (row) {
+          targetRows.push(row);
+        }
+      }
+
+      // Se a primeira busca já achou bastante, economiza o 2º crédito.
+      if (targetRows.length >= 6) {
+        break;
+      }
     }
+
+    debug[target.platform] = {
+      raw: rawCount,
+      direct: targetRows.length
+    };
+
+    all.push(...targetRows);
   }
 
   const unique = [];
@@ -424,9 +457,7 @@ async function webSearchProducts(categories) {
         .replace(/[?#].*$/, '')
         .replace(/\/$/, '');
 
-    if (!key || seen.has(key)) {
-      continue;
-    }
+    if (!key || seen.has(key)) continue;
 
     seen.add(key);
     unique.push(row);
@@ -434,13 +465,30 @@ async function webSearchProducts(categories) {
 
   unique.sort(
     (a, b) =>
-      Number(b.tavilyScore || 0) -
-      Number(a.tavilyScore || 0)
+      (
+        Number(b.soldCount || 0) * 10 +
+        Number(b.reviewCount || 0) +
+        Number(b.tavilyScore || 0)
+      ) -
+      (
+        Number(a.soldCount || 0) * 10 +
+        Number(a.reviewCount || 0) +
+        Number(a.tavilyScore || 0)
+      )
   );
 
   if (!unique.length) {
+    const parts =
+      Object.entries(debug)
+        .map(
+          ([name, x]) =>
+            `${name}: ${x.raw} resultados, ${x.direct} links diretos`
+        )
+        .join(' | ');
+
     throw new Error(
-      'A Tavily pesquisou Shopee, SHEIN e Mercado Livre, mas não encontrou páginas de produto aproveitáveis nesta rodada. Tente novamente com outros temas.'
+      'A pesquisa trouxe resultados, mas nenhum veio como página direta de produto. ' +
+      `Diagnóstico: ${parts}.`
     );
   }
 
@@ -801,7 +849,28 @@ async function enrich(row) {
     apiProduct = await importProductFromUrl(publicLink);
   } catch {}
 
-  const meta = await pageMetadata(publicLink, platform);
+  const directCandidate =
+    likelyProductUrl(
+      platform,
+      publicLink
+    );
+
+  const meta =
+    await pageMetadata(
+      publicLink,
+      platform
+    );
+
+  const finalProductUrl =
+    meta.directProduct
+      ? (meta.finalUrl || publicLink)
+      : directCandidate
+        ? publicLink
+        : null;
+
+  if (!finalProductUrl) {
+    return null;
+  }
 
   const rowName = String(row.name || '').trim();
   const apiName = String(
@@ -827,6 +896,11 @@ async function enrich(row) {
   const price =
     Number(apiProduct?.price || 0) ||
     Number(meta.price || 0) ||
+    (
+      row.sourceVerified
+        ? Number(row.price || 0)
+        : 0
+    ) ||
     0;
 
   const originalPrice =
@@ -861,11 +935,6 @@ async function enrich(row) {
       ? countNumber(row.reviewCount)
       : 0
   );
-
-  // O redirect precisa terminar numa página direta de produto.
-  if (!meta.directProduct) {
-    return null;
-  }
 
   // Regra dura: sem qualquer prova CONFIRMADA de venda, descarta.
   if (soldCount <= 0 && reviewCount <= 0) {
@@ -902,9 +971,9 @@ async function enrich(row) {
       ),
     canonicalUrl:
       apiProduct?.canonicalUrl ||
-      meta.finalUrl,
+      finalProductUrl,
     publicLink:
-      meta.finalUrl,
+      finalProductUrl,
     affiliateLink: null,
     rating:
       Number(apiProduct?.rating || 0),
