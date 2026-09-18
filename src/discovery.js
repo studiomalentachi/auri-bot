@@ -14,11 +14,19 @@ import {
   updateStore
 } from './store.js';
 
-const MIN_SALES = () =>
-  Math.max(
+const MIN_SALES = () => {
+  const s =
+    readStore();
+
+  return Math.max(
     50,
-    Number(config.discoveryMinSales || 50)
+    Number(
+      s.searchFilters?.minSales ||
+      config.discoveryMinSales ||
+      50
+    )
   );
+};
 
 function nextCategories() {
   const s = readStore();
@@ -152,16 +160,40 @@ async function discoverShopee(categories) {
 
   for (const keyword of categories) {
     try {
+      const filters =
+        readStore()
+          .searchFilters ||
+        {};
+
       const found =
         await searchShopeeOffersBroad(
           keyword,
           {
             minSales:
               MIN_SALES(),
-            desired: 20,
-            pages: 2,
-            limitPerPage: 20,
-            sortType: 5
+            desired:
+              Math.max(
+                20,
+                Number(
+                  filters.resultLimit ||
+                  20
+                )
+              ),
+            pages:
+              filters.broadSearch ===
+              false
+                ? 2
+                : 4,
+            limitPerPage:
+              20,
+            sortType:
+              5,
+            broadSearch:
+              filters.broadSearch !==
+              false,
+            sortBy:
+              filters.sortBy ||
+              'sales'
           }
         );
 
@@ -954,25 +986,50 @@ export async function discoverWebOffers({
   const categories =
     nextCategories();
 
+  const enabled =
+    new Set(
+      Array.isArray(
+        state.enabledMarketplaces
+      )
+        ? state.enabledMarketplaces
+        : [
+            'shopee',
+            'shein',
+            'mercadolivre'
+          ]
+    );
+
+  if (!enabled.size) {
+    return [];
+  }
+
   const [
     shopee,
     ml,
     shein
   ] =
     await Promise.all([
-      discoverShopee(
-        categories
-      ),
-      discoverMercadoLivre(
-        categories
-      ).catch(
-        () => []
-      ),
-      discoverShein(
-        categories
-      ).catch(
-        () => []
-      )
+      enabled.has('shopee')
+        ? discoverShopee(
+            categories
+          )
+        : Promise.resolve([]),
+
+      enabled.has('mercadolivre')
+        ? discoverMercadoLivre(
+            categories
+          ).catch(
+            () => []
+          )
+        : Promise.resolve([]),
+
+      enabled.has('shein')
+        ? discoverShein(
+            categories
+          ).catch(
+            () => []
+          )
+        : Promise.resolve([])
     ]);
 
   const combined = [
@@ -1003,7 +1060,10 @@ export async function discoverWebOffers({
       'shopee',
       'mercadolivre',
       'shein'
-    ]
+    ].filter(
+      (platform) =>
+        enabled.has(platform)
+    )
   ) {
     const p =
       combined.find(

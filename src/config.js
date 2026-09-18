@@ -20,11 +20,11 @@ export const config = {
   groupDelayMinSeconds: Math.max(0, envInt('GROUP_DELAY_MIN_SECONDS', 60)),
   groupDelayMaxSeconds: Math.max(0, envInt('GROUP_DELAY_MAX_SECONDS', 120)),
   discoveryEveryMinutes: Math.max(60, envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)),
-  discoveryMaxPerRun: Math.max(5, envInt('AUTO_DISCOVERY_MAX_PER_RUN', 20)),
+  discoveryMaxPerRun: Math.max(10, envInt('AUTO_DISCOVERY_MAX_PER_RUN', 30)),
   discoveryDailyTarget: Math.max(1, envInt('AUTO_DISCOVERY_DAILY_TARGET', 85)),
   discoverySuggestionCap: Math.max(50, envInt('AUTO_DISCOVERY_SUGGESTION_CAP', 180)),
   discoveryMinSales: Math.max(50, envInt('AUTO_DISCOVERY_MIN_SALES', 50)),
-  discoveryCategoriesPerRun: Math.max(2, Math.min(12, envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 8))),
+  discoveryCategoriesPerRun: Math.max(4, Math.min(16, envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 12))),
   discoveryKeywords: env(
     'AUTO_DISCOVERY_KEYWORDS',
     [

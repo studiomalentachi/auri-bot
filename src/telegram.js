@@ -27,6 +27,8 @@ const BTN = {
   sendNow: '▶️ Enviar agora',
   ai: '🧠 IA',
   discovery: '🤖 Auto busca',
+  marketplaces: '🛒 Marketplaces',
+  filters: '🎛️ Filtros',
   suggestions: '📥 Caixa de aprovação',
   results: '📈 Resultados',
   pause: '⏸️ Pausar envios',
@@ -41,10 +43,705 @@ function mainMenu() {
     [BTN.search, BTN.suggestions],
     [BTN.queue, BTN.groups],
     [BTN.whatsapp, BTN.status],
+    [BTN.marketplaces, BTN.filters],
     [BTN.ai, BTN.discovery],
     [BTN.results, BTN.sendNow],
     [s.paused ? BTN.resume : BTN.pause]
   ]).resize();
+}
+
+
+const BUILTIN_MARKETPLACES = {
+  shopee: {
+    label: '🧡 Shopee',
+    autoSearch: true
+  },
+  shein: {
+    label: '🖤 SHEIN',
+    autoSearch: true
+  },
+  mercadolivre: {
+    label: '💛 Mercado Livre',
+    autoSearch: true
+  },
+  amazon: {
+    label: '🛒 Amazon',
+    autoSearch: false
+  }
+};
+
+function marketplaceCatalog() {
+  const s =
+    readStore();
+
+  const catalog = {
+    ...BUILTIN_MARKETPLACES
+  };
+
+  for (
+    const item of
+    s.customMarketplaces ||
+    []
+  ) {
+    catalog[item.id] = {
+      label:
+        `🛍️ ${item.name}`,
+      autoSearch:
+        false,
+      custom:
+        true,
+      domain:
+        item.domain,
+      name:
+        item.name
+    };
+  }
+
+  return catalog;
+}
+
+function enabledMarketplaces() {
+  const s =
+    readStore();
+
+  const catalog =
+    marketplaceCatalog();
+
+  const list =
+    Array.isArray(
+      s.enabledMarketplaces
+    )
+      ? s.enabledMarketplaces
+      : [
+          'shopee',
+          'shein',
+          'mercadolivre'
+        ];
+
+  return list.filter(
+    (x) =>
+      Boolean(
+        catalog[x]
+      )
+  );
+}
+
+function automaticMarketplaces() {
+  const catalog =
+    marketplaceCatalog();
+
+  return enabledMarketplaces()
+    .filter(
+      (id) =>
+        catalog[id]
+          ?.autoSearch === true
+    );
+}
+
+function marketplaceNames(
+  list =
+    enabledMarketplaces()
+) {
+  const catalog =
+    marketplaceCatalog();
+
+  if (!list.length) {
+    return 'nenhum';
+  }
+
+  return list
+    .map(
+      (x) =>
+        catalog[x]?.label ||
+        x
+    )
+    .join(' • ');
+}
+
+function customMarketplaceForUrl(
+  inputUrl
+) {
+  let host = '';
+
+  try {
+    host =
+      new URL(
+        inputUrl
+      )
+        .hostname
+        .toLowerCase()
+        .replace(
+          /^www\./,
+          ''
+        );
+  } catch {
+    return null;
+  }
+
+  const s =
+    readStore();
+
+  return (
+    s.customMarketplaces ||
+    []
+  ).find(
+    (x) =>
+      host ===
+        x.domain ||
+      host.endsWith(
+        `.${x.domain}`
+      )
+  ) || null;
+}
+
+function slugMarketplace(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(
+      /[\u0300-\u036f]/g,
+      ''
+    )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9]+/g,
+      '-'
+    )
+    .replace(
+      /^-+|-+$/g,
+      ''
+    )
+    .slice(0, 40);
+}
+
+function searchFilterState() {
+  const s =
+    readStore();
+
+  return {
+    minSales:
+      Math.max(
+        50,
+        Number(
+          s.searchFilters
+            ?.minSales ||
+          50
+        )
+      ),
+    resultLimit:
+      Math.max(
+        5,
+        Math.min(
+          20,
+          Number(
+            s.searchFilters
+              ?.resultLimit ||
+            20
+          )
+        )
+      ),
+    broadSearch:
+      s.searchFilters
+        ?.broadSearch !==
+      false,
+    sortBy:
+      s.searchFilters
+        ?.sortBy ||
+      'sales'
+  };
+}
+
+function searchSortLabel(value) {
+  if (
+    value ===
+    'discount'
+  ) {
+    return '🔥 maior desconto';
+  }
+
+  if (
+    value ===
+    'rating'
+  ) {
+    return '⭐ melhor nota';
+  }
+
+  if (
+    value ===
+    'balanced'
+  ) {
+    return '✨ equilibrado';
+  }
+
+  return '🛒 mais vendidos';
+}
+
+async function showSearchFilters(ctx) {
+  const filters =
+    searchFilterState();
+
+  return ctx.reply(
+    `🎛️ FILTROS DA BUSCA\n\n` +
+      `🛒 Vendas mínimas: ${filters.minSales}\n` +
+      `📦 Produtos por busca: até ${filters.resultLimit}\n` +
+      `🔎 Busca ampla: ${filters.broadSearch ? '✅ ligada' : '❌ desligada'}\n` +
+      `↕️ Ordenar: ${searchSortLabel(filters.sortBy)}\n\n` +
+      'A busca ampla tenta variações do termo e mais páginas para encontrar bem mais produtos.',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          `${
+            filters.minSales === 50
+              ? '✅ '
+              : ''
+          }50 vendas`,
+          'filter:min:50'
+        ),
+        Markup.button.callback(
+          `${
+            filters.minSales === 100
+              ? '✅ '
+              : ''
+          }100`,
+          'filter:min:100'
+        )
+      ],
+      [
+        Markup.button.callback(
+          `${
+            filters.minSales === 500
+              ? '✅ '
+              : ''
+          }500`,
+          'filter:min:500'
+        ),
+        Markup.button.callback(
+          `${
+            filters.minSales === 1000
+              ? '✅ '
+              : ''
+          }1.000`,
+          'filter:min:1000'
+        )
+      ],
+      [
+        Markup.button.callback(
+          `${
+            filters.resultLimit === 10
+              ? '✅ '
+              : ''
+          }10 produtos`,
+          'filter:limit:10'
+        ),
+        Markup.button.callback(
+          `${
+            filters.resultLimit === 20
+              ? '✅ '
+              : ''
+          }20 produtos`,
+          'filter:limit:20'
+        )
+      ],
+      [
+        Markup.button.callback(
+          filters.broadSearch
+            ? '✅ Busca ampla'
+            : '⬜ Busca ampla',
+          'filter:broad'
+        )
+      ],
+      [
+        Markup.button.callback(
+          `${
+            filters.sortBy === 'sales'
+              ? '✅ '
+              : ''
+          }🛒 Mais vendidos`,
+          'filter:sort:sales'
+        )
+      ],
+      [
+        Markup.button.callback(
+          `${
+            filters.sortBy === 'discount'
+              ? '✅ '
+              : ''
+          }🔥 Maior desconto`,
+          'filter:sort:discount'
+        ),
+        Markup.button.callback(
+          `${
+            filters.sortBy === 'rating'
+              ? '✅ '
+              : ''
+          }⭐ Melhor nota`,
+          'filter:sort:rating'
+        )
+      ],
+      [
+        Markup.button.callback(
+          `${
+            filters.sortBy === 'balanced'
+              ? '✅ '
+              : ''
+          }✨ Equilibrado`,
+          'filter:sort:balanced'
+        )
+      ]
+    ])
+  );
+}
+
+async function showMarketplaces(ctx) {
+  const active =
+    new Set(
+      enabledMarketplaces()
+    );
+
+  const catalog =
+    marketplaceCatalog();
+
+  const rows =
+    Object.entries(
+      catalog
+    ).map(
+      ([id, data]) => [
+        Markup.button.callback(
+          `${
+            active.has(id)
+              ? '✅'
+              : '⬜'
+          } ${data.label}${
+            data.autoSearch
+              ? ''
+              : ' • por link'
+          }`,
+          `mp:toggle:${id}`
+        )
+      ]
+    );
+
+  rows.push([
+    Markup.button.callback(
+      '➕ Adicionar marketplace',
+      'mp:add'
+    )
+  ]);
+
+  if (
+    (
+      readStore()
+        .customMarketplaces ||
+      []
+    ).length
+  ) {
+    rows.push([
+      Markup.button.callback(
+        '🗑️ Excluir personalizado',
+        'mp:deletecustom'
+      )
+    ]);
+  }
+
+  rows.push([
+    Markup.button.callback(
+      '✅ Ativar todos',
+      'mp:all'
+    ),
+    Markup.button.callback(
+      '🚫 Desativar todos',
+      'mp:none'
+    )
+  ]);
+
+  return ctx.reply(
+    `🛒 MARKETPLACES\n\n` +
+      `Ativos agora:\n${marketplaceNames(
+        [...active]
+      )}\n\n` +
+      '✅ Shopee, SHEIN e Mercado Livre têm pesquisa automática.\n' +
+      '🔗 Amazon e marketplaces que você adicionar manualmente ficam disponíveis para trabalhar por link.\n\n' +
+      'Isso acontece porque a Auri só chama de pesquisa automática quando consegue validar os dados exigidos, inclusive o número de vendas.',
+    Markup.inlineKeyboard(
+      rows
+    )
+  );
+}
+
+function queueItemTitle(item) {
+  return String(
+    item?.product?.name ||
+    (item?.text || '')
+      .split('\n')[0] ||
+    'Oferta'
+  ).trim();
+}
+
+async function showQueueManager(
+  ctx,
+  page = 0
+) {
+  const s = readStore();
+  const queue =
+    Array.isArray(s.queue)
+      ? s.queue
+      : [];
+
+  if (!queue.length) {
+    return ctx.reply(
+      '📦 A fila está vazia.',
+      mainMenu()
+    );
+  }
+
+  const perPage = 8;
+  const pages =
+    Math.max(
+      1,
+      Math.ceil(
+        queue.length /
+        perPage
+      )
+    );
+
+  page =
+    Math.max(
+      0,
+      Math.min(
+        pages - 1,
+        Number(page) || 0
+      )
+    );
+
+  const start =
+    page * perPage;
+
+  const slice =
+    queue.slice(
+      start,
+      start +
+      perPage
+    );
+
+  const rows =
+    slice.map(
+      (item, localIndex) => {
+        const index =
+          start +
+          localIndex;
+
+        return [
+          Markup.button.callback(
+            `${index + 1}. ${queueItemTitle(
+              item
+            ).slice(0, 42)}`,
+            `q:open:${index}:${page}`
+          )
+        ];
+      }
+    );
+
+  const nav = [];
+
+  if (page > 0) {
+    nav.push(
+      Markup.button.callback(
+        '⬅️',
+        `q:page:${page - 1}`
+      )
+    );
+  }
+
+  nav.push(
+    Markup.button.callback(
+      `${page + 1}/${pages}`,
+      'noop'
+    )
+  );
+
+  if (
+    page <
+    pages - 1
+  ) {
+    nav.push(
+      Markup.button.callback(
+        '➡️',
+        `q:page:${page + 1}`
+      )
+    );
+  }
+
+  rows.push(nav);
+
+  return ctx.reply(
+    `📦 GERENCIAR FILA\n\n` +
+      `Total: ${queue.length} oferta(s)\n` +
+      'Toque em uma oferta para editar, excluir ou mudar a ordem.',
+    Markup.inlineKeyboard(
+      rows
+    )
+  );
+}
+
+async function showQueueItem(
+  ctx,
+  index,
+  page = 0
+) {
+  const s = readStore();
+  const queue =
+    s.queue || [];
+
+  const item =
+    queue[
+      Number(index)
+    ];
+
+  if (!item) {
+    return ctx.reply(
+      '⚠️ Essa oferta não está mais na fila.',
+      mainMenu()
+    );
+  }
+
+  const platform =
+    marketplaceLabel(
+      item.product?.platform
+    );
+
+  const textPreview =
+    String(
+      item.text || ''
+    )
+      .trim()
+      .slice(
+        0,
+        650
+      );
+
+  const rows = [
+    [
+      Markup.button.callback(
+        '✏️ Editar texto',
+        `q:edittext:${index}:${page}`
+      ),
+      Markup.button.callback(
+        '🔗 Editar link',
+        `q:editlink:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '📸 Trocar foto',
+        `q:editphoto:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '⬆️ Subir',
+        `q:up:${index}:${page}`
+      ),
+      Markup.button.callback(
+        '⬇️ Descer',
+        `q:down:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '⏫ Ir pro topo',
+        `q:top:${index}:${page}`
+      ),
+      Markup.button.callback(
+        '⏬ Ir pro fim',
+        `q:bottom:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '🔢 Mover para posição',
+        `q:move:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '🗑️ Excluir',
+        `q:delete:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '⬅️ Voltar à fila',
+        `q:page:${page}`
+      )
+    ]
+  ];
+
+  return ctx.reply(
+    `📦 OFERTA ${
+      Number(index) + 1
+    } DE ${queue.length}\n\n` +
+      `${platform}\n` +
+      `📌 ${queueItemTitle(
+        item
+      )}\n\n` +
+      `✍️ TEXTO\n${
+        textPreview ||
+        '— sem texto'
+      }\n\n` +
+      `🔗 LINK\n${
+        item.link ||
+        item.product?.affiliateLink ||
+        '— sem link'
+      }`,
+    Markup.inlineKeyboard(
+      rows
+    )
+  );
+}
+
+function moveQueueItem(
+  fromIndex,
+  toIndex
+) {
+  updateStore((s) => {
+    const queue =
+      Array.isArray(s.queue)
+        ? [...s.queue]
+        : [];
+
+    const from =
+      Number(fromIndex);
+
+    const to =
+      Number(toIndex);
+
+    if (
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      from < 0 ||
+      from >= queue.length ||
+      to < 0 ||
+      to >= queue.length ||
+      from === to
+    ) {
+      return s;
+    }
+
+    const [item] =
+      queue.splice(
+        from,
+        1
+      );
+
+    queue.splice(
+      to,
+      0,
+      item
+    );
+
+    s.queue = queue;
+
+    return s;
+  });
 }
 
 function onlyAdmin(adminId) {
@@ -70,6 +767,9 @@ function statusText() {
     `WhatsApp: ${isWhatsAppConnected() ? '✅ conectado' : '❌ desconectado'}\n` +
     `Grupos: ${s.targetGroups?.length || 0}\n` +
     `Fila: ${s.queue.length}\n` +
+    `Marketplaces: ${marketplaceNames(
+      s.enabledMarketplaces
+    )}\n` +
     `Automação: ${s.paused ? '⏸️ pausada' : '✅ ativa'}\n` +
     `Horário: 08:00–22:00 | ${config.sendIntervalMinutes} min | até 85/dia\n` +
     `IA escolhida: ${s.aiProvider || 'auto'} | chaves disponíveis: ${aiOn}\n` +
@@ -456,35 +1156,92 @@ async function showGroups(ctx, page = 0) {
 }
 
 async function beginSearch(ctx) {
-  drafts.set(ctx.from.id, {
-    step: 'search_platform',
-    mode: 'search',
-    data: {}
-  });
+  const active =
+    automaticMarketplaces();
 
-  await ctx.reply(
+  if (!active.length) {
+    return ctx.reply(
+      '⚠️ Não há marketplace com pesquisa automática ativo.\n\nAbra 🛒 Marketplaces para ativar Shopee, SHEIN ou Mercado Livre. Para Amazon e marketplaces personalizados, use 🔗 Oferta por link.',
+      mainMenu()
+    );
+  }
+
+  drafts.set(
+    ctx.from.id,
+    {
+      step:
+        'search_platform',
+      mode:
+        'search',
+      data: {}
+    }
+  );
+
+  const catalog =
+    marketplaceCatalog();
+
+  const rows = [];
+
+  for (
+    let i = 0;
+    i < active.length;
+    i += 2
+  ) {
+    rows.push(
+      active
+        .slice(
+          i,
+          i + 2
+        )
+        .map(
+          (id) =>
+            Markup.button.callback(
+              catalog[id].label,
+              `sp:${id}`
+            )
+        )
+    );
+  }
+
+  rows.push([
+    Markup.button.callback(
+      '🎛️ Ajustar filtros',
+      'filter:menu'
+    )
+  ]);
+
+  rows.push([
+    Markup.button.callback(
+      '⚙️ Gerenciar marketplaces',
+      'mp:menu'
+    )
+  ]);
+
+  const filters =
+    searchFilterState();
+
+  return ctx.reply(
     '🔎 Onde quer buscar?\n\n' +
-      'A Auri só mostra produtos com pelo menos 50 vendas confirmadas.',
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback('🧡 Shopee', 'sp:shopee'),
-        Markup.button.callback('🖤 SHEIN', 'sp:shein')
-      ],
-      [
-        Markup.button.callback('💛 Mercado Livre', 'sp:mercadolivre')
-      ]
-    ])
+      `Filtro atual: ${filters.minSales}+ vendas • até ${filters.resultLimit} produtos • ${filters.broadSearch ? 'busca ampla' : 'busca exata'}.`,
+    Markup.inlineKeyboard(
+      rows
+    )
   );
 }
 
 function marketplaceLabel(platform) {
-  const p = String(platform || '').toLowerCase();
+  const p =
+    String(
+      platform || ''
+    ).toLowerCase();
 
-  if (p === 'mercadolivre') return '💛 Mercado Livre';
-  if (p === 'shein') return '🖤 SHEIN';
-  if (p === 'shopee') return '🧡 Shopee';
+  const catalog =
+    marketplaceCatalog();
 
-  return '🛍️ Produto';
+  return (
+    catalog[p]?.label ||
+    '🛍️ Produto'
+  );
 }
 
 function moneyBR(value) {
@@ -875,7 +1632,17 @@ async function showDiscovery(ctx) {
   await ctx.reply(
     `🤖 Pesquisa automática da Auri\n\n` +
       `Pesquisa web real: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'}\n` +
-      `Marketplaces: 🧡 Shopee • 🖤 SHEIN • 💛 Mercado Livre\n` +
+      `Pesquisa automática: ${marketplaceNames(
+        automaticMarketplaces()
+      )}\n` +
+      `Outros ativos por link: ${marketplaceNames(
+        enabledMarketplaces()
+          .filter(
+            (id) =>
+              !automaticMarketplaces()
+                .includes(id)
+          )
+      )}\n` +
       `Categorias: tudo — inclusive alimentos, bebidas, limpeza, casa, beleza, moda, tecnologia, pet, infantil, carro, papelaria, cozinha, fitness e viagem.\n` +
       `Rodada: até ${config.discoveryMaxPerRun} produtos\n` +
       `Intervalo: ${config.discoveryEveryMinutes} min\n` +
@@ -1145,6 +1912,53 @@ export function startTelegram({ token, adminId }) {
     }
 
 
+    if (d.step === 'queue_edit_photo') {
+      try {
+        const index =
+          Number(
+            d.data.queueIndex
+          );
+
+        const photoPath =
+          await downloadTelegramPhoto(
+            ctx,
+            ctx.message.photo.at(-1).file_id
+          );
+
+        updateStore((s) => {
+          if (
+            s.queue?.[index]
+          ) {
+            s.queue[index] = {
+              ...s.queue[index],
+              photoPath
+            };
+          }
+
+          return s;
+        });
+
+        drafts.delete(
+          ctx.from.id
+        );
+
+        await ctx.reply(
+          '✅ Foto da oferta atualizada.',
+          Markup.removeKeyboard()
+        );
+
+        return showQueueItem(
+          ctx,
+          index,
+          d.data.queuePage || 0
+        );
+      } catch (e) {
+        return ctx.reply(
+          `⚠️ ${e.message}`
+        );
+      }
+    }
+
     if (d.step === 'edit_photo') {
       try {
         d.data.photoPath = await downloadTelegramPhoto(
@@ -1200,7 +2014,24 @@ export function startTelegram({ token, adminId }) {
       if (text === BTN.linkOffer) return beginLink(ctx);
       if (text === BTN.search) return beginSearch(ctx);
       if (text === BTN.suggestions) return showSuggestions(ctx);
-      if (text === BTN.queue) return ctx.reply(queueText(), mainMenu());
+      if (text === BTN.queue) {
+        return showQueueManager(
+          ctx,
+          0
+        );
+      }
+
+      if (text === BTN.marketplaces) {
+        return showMarketplaces(
+          ctx
+        );
+      }
+
+      if (text === BTN.filters) {
+        return showSearchFilters(
+          ctx
+        );
+      }
 
       if (text === BTN.groups) {
         lastGroups = [];
@@ -1439,6 +2270,24 @@ export function startTelegram({ token, adminId }) {
 
       try {
         const product = await importProductFromUrl(text);
+
+        if (
+          product?.platform ===
+          'generic'
+        ) {
+          const custom =
+            customMarketplaceForUrl(
+              text
+            );
+
+          if (custom) {
+            product.platform =
+              custom.id;
+
+            product.marketplaceName =
+              custom.name;
+          }
+        }
 
         d.data.product = product;
         d.data.link =
@@ -1756,6 +2605,321 @@ export function startTelegram({ token, adminId }) {
       return previewOffer(ctx, d);
     }
 
+    if (d.step === 'marketplace_add_name') {
+      const name =
+        String(text || '')
+          .trim();
+
+      if (
+        name.length < 2
+      ) {
+        return ctx.reply(
+          '⚠️ Envie um nome válido. Ex.: Magalu, AliExpress, Temu.'
+        );
+      }
+
+      d.data.marketplaceName =
+        name;
+
+      d.step =
+        'marketplace_add_domain';
+
+      drafts.set(
+        ctx.from.id,
+        d
+      );
+
+      return ctx.reply(
+        '🌐 Agora envie o domínio/site desse marketplace.\n\nEx.: magazineluiza.com.br\nNão precisa mandar senha, token ou dados da sua conta.',
+        Markup.keyboard([
+          [BTN.cancel]
+        ]).resize()
+      );
+    }
+
+    if (d.step === 'marketplace_add_domain') {
+      let domain =
+        String(text || '')
+          .trim()
+          .toLowerCase();
+
+      domain =
+        domain
+          .replace(
+            /^https?:\/\//,
+            ''
+          )
+          .replace(
+            /^www\./,
+            ''
+          )
+          .split('/')[0];
+
+      if (
+        !domain.includes('.') ||
+        domain.includes(' ')
+      ) {
+        return ctx.reply(
+          '⚠️ Esse domínio não parece válido. Ex.: magazineluiza.com.br'
+        );
+      }
+
+      const name =
+        d.data
+          .marketplaceName;
+
+      let id =
+        slugMarketplace(
+          name
+        );
+
+      if (
+        [
+          'shopee',
+          'shein',
+          'mercadolivre',
+          'amazon'
+        ].includes(id)
+      ) {
+        id =
+          `custom-${id}`;
+      } else {
+        id =
+          `custom-${id}`;
+      }
+
+      if (
+        !id ||
+        id ===
+        'custom-'
+      ) {
+        id =
+          `custom-${Date.now()}`;
+      }
+
+      updateStore((s) => {
+        const current =
+          Array.isArray(
+            s.customMarketplaces
+          )
+            ? s.customMarketplaces
+            : [];
+
+        const existing =
+          current.find(
+            (x) =>
+              x.domain ===
+              domain
+          );
+
+        if (existing) {
+          if (
+            !s.enabledMarketplaces
+              .includes(
+                existing.id
+              )
+          ) {
+            s.enabledMarketplaces
+              .push(
+                existing.id
+              );
+          }
+
+          return s;
+        }
+
+        s.customMarketplaces = [
+          ...current,
+          {
+            id,
+            name,
+            domain,
+            autoSearch:
+              false
+          }
+        ];
+
+        s.enabledMarketplaces = [
+          ...new Set([
+            ...(
+              s.enabledMarketplaces ||
+              []
+            ),
+            id
+          ])
+        ];
+
+        return s;
+      });
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        `✅ ${name} foi adicionado à Auri.\n\n` +
+          'Por enquanto ele funciona por 🔗 Oferta por link. Para ter pesquisa automática, a integração desse marketplace precisa existir e fornecer os dados que você exige.',
+        Markup.removeKeyboard()
+      );
+
+      return showMarketplaces(
+        ctx
+      );
+    }
+
+    if (d.step === 'queue_edit_text') {
+      const edited =
+        String(text || '')
+          .trim();
+
+      if (!edited) {
+        return ctx.reply(
+          '⚠️ O texto não pode ficar vazio.'
+        );
+      }
+
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      updateStore((s) => {
+        if (
+          s.queue?.[index]
+        ) {
+          s.queue[index] = {
+            ...s.queue[index],
+            text: edited
+          };
+        }
+
+        return s;
+      });
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        '✅ Texto da oferta atualizado.',
+        Markup.removeKeyboard()
+      );
+
+      return showQueueItem(
+        ctx,
+        index,
+        d.data.queuePage || 0
+      );
+    }
+
+    if (d.step === 'queue_edit_link') {
+      const link =
+        String(text || '')
+          .trim();
+
+      if (
+        !/^https?:\/\//i.test(
+          link
+        )
+      ) {
+        return ctx.reply(
+          '⚠️ Envie um link completo começando com http:// ou https://.'
+        );
+      }
+
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      updateStore((s) => {
+        if (
+          s.queue?.[index]
+        ) {
+          s.queue[index] = {
+            ...s.queue[index],
+            link
+          };
+
+          if (
+            s.queue[index].product
+          ) {
+            s.queue[index].product = {
+              ...s.queue[index].product,
+              affiliateLink: link
+            };
+          }
+        }
+
+        return s;
+      });
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        '✅ Link da oferta atualizado.',
+        Markup.removeKeyboard()
+      );
+
+      return showQueueItem(
+        ctx,
+        index,
+        d.data.queuePage || 0
+      );
+    }
+
+    if (d.step === 'queue_move_position') {
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      const queue =
+        readStore().queue ||
+        [];
+
+      const position =
+        Number.parseInt(
+          String(text || '')
+            .trim(),
+          10
+        );
+
+      if (
+        !Number.isInteger(position) ||
+        position < 1 ||
+        position > queue.length
+      ) {
+        return ctx.reply(
+          `⚠️ Digite uma posição entre 1 e ${queue.length}.`
+        );
+      }
+
+      moveQueueItem(
+        index,
+        position - 1
+      );
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        `✅ Oferta movida para a posição ${position}.`,
+        Markup.removeKeyboard()
+      );
+
+      return showQueueManager(
+        ctx,
+        Math.floor(
+          (position - 1) /
+          8
+        )
+      );
+    }
+
     if (d.step === 'suggestion_coupon') {
       const value =
         String(text || '').trim();
@@ -1924,78 +3088,192 @@ export function startTelegram({ token, adminId }) {
     }
 
     if (d.step === 'search_keyword') {
-      const platform = d.data.platform;
-      drafts.delete(ctx.from.id);
+      const platform =
+        d.data.platform;
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      const filters =
+        searchFilterState();
 
       await ctx.reply(
-        '🔎 Buscando produtos reais com 50+ vendas…'
+        `🔎 Buscando até ${filters.resultLimit} produtos com ${filters.minSales}+ vendas…`
       );
 
       try {
         let found = [];
 
-        if (platform === 'shein') {
-          found = await searchSheinOffers(
-            text,
-            8
-          );
-        } else if (platform === 'shopee') {
-          found = await searchShopeeOffersBroad(
-            text,
-            {
-              minSales:
-                Number(
-                  config.discoveryMinSales ||
-                  50
-                ),
-              desired: 8,
-              pages: 3,
-              limitPerPage: 20,
-              sortType: 5
-            }
-          );
+        if (
+          platform ===
+          'shein'
+        ) {
+          found =
+            await searchSheinOffers(
+              text,
+              filters.resultLimit
+            );
+        } else if (
+          platform ===
+          'shopee'
+        ) {
+          found =
+            await searchShopeeOffersBroad(
+              text,
+              {
+                minSales:
+                  filters.minSales,
+                desired:
+                  filters.resultLimit,
+                pages:
+                  filters.broadSearch
+                    ? 5
+                    : 2,
+                limitPerPage:
+                  20,
+                sortType:
+                  5,
+                broadSearch:
+                  filters.broadSearch,
+                sortBy:
+                  filters.sortBy
+              }
+            );
         } else {
-          found = await searchMarketplace(
-            platform,
-            text,
-            12
-          );
+          found =
+            await searchMarketplace(
+              platform,
+              text,
+              filters.resultLimit
+            );
         }
 
-        lastSearch = found
-          .filter((p) => Number(p.sales || 0) >= 50)
-          .sort(
-            (a, b) =>
-              Number(b.sales || 0) -
-              Number(a.sales || 0)
+        const sortRows =
+          (rows) => {
+            const copy =
+              [...rows];
+
+            if (
+              filters.sortBy ===
+              'discount'
+            ) {
+              return copy.sort(
+                (a, b) =>
+                  Number(
+                    b.discountPct ||
+                    0
+                  ) -
+                  Number(
+                    a.discountPct ||
+                    0
+                  )
+              );
+            }
+
+            if (
+              filters.sortBy ===
+              'rating'
+            ) {
+              return copy.sort(
+                (a, b) =>
+                  Number(
+                    b.rating ||
+                    0
+                  ) -
+                  Number(
+                    a.rating ||
+                    0
+                  )
+              );
+            }
+
+            if (
+              filters.sortBy ===
+              'balanced'
+            ) {
+              return copy.sort(
+                (a, b) =>
+                  Number(
+                    b.score ||
+                    b.verifiedScore ||
+                    0
+                  ) -
+                  Number(
+                    a.score ||
+                    a.verifiedScore ||
+                    0
+                  )
+              );
+            }
+
+            return copy.sort(
+              (a, b) =>
+                Number(
+                  b.sales ||
+                  0
+                ) -
+                Number(
+                  a.sales ||
+                  0
+                )
+            );
+          };
+
+        lastSearch =
+          sortRows(
+            found.filter(
+              (p) =>
+                Number(
+                  p.sales || 0
+                ) >=
+                filters.minSales
+            )
+          ).slice(
+            0,
+            filters.resultLimit
           );
 
-        if (!lastSearch.length) {
+        if (
+          !lastSearch.length
+        ) {
           return ctx.reply(
-            '⚠️ Não encontrei nenhum resultado com 50+ vendas confirmadas.\n\n' +
+            `⚠️ Não encontrei nenhum resultado com ${filters.minSales}+ vendas confirmadas.\n\n` +
               (
-                platform === 'shopee'
-                  ? 'Eu já tentei automaticamente versões mais amplas do termo e várias páginas da Shopee. Tente uma palavra ainda mais simples, como “cadeira”.'
-                  : 'Tente outro termo. A Auri não vai completar ou inventar número de vendas.'
+                platform ===
+                'shopee'
+                  ? 'Com a busca ampla ligada, a Auri já tenta variações do termo e até 5 páginas. Você também pode reduzir o filtro de vendas em 🎛️ Filtros.'
+                  : 'Tente um termo mais simples ou ajuste 🎛️ Filtros.'
               ),
             mainMenu()
           );
         }
 
-        const rows = lastSearch.map((p, i) => [
-          Markup.button.callback(
-            `${String(p.name || 'Produto').slice(0, 36)} • 🛒 ${Number(
-              p.sales
-            ).toLocaleString('pt-BR')}`,
-            `pick:${i}`
-          )
-        ]);
+        const rows =
+          lastSearch.map(
+            (p, i) => [
+              Markup.button.callback(
+                `${String(
+                  p.name ||
+                  'Produto'
+                ).slice(0, 33)} • 🛒 ${Number(
+                  p.sales
+                ).toLocaleString(
+                  'pt-BR'
+                )}`,
+                `pick:${i}`
+              )
+            ]
+          );
 
         return ctx.reply(
           `${marketplaceLabel(platform)}\n\n` +
-            `✅ ${lastSearch.length} produto(s) com 50+ vendas confirmadas.\n` +
+            `✅ ${lastSearch.length} produto(s) encontrados.\n` +
+            `Filtro: ${filters.minSales}+ vendas • ${searchSortLabel(filters.sortBy)}.\n\n` +
             'Escolha um para abrir na Caixa de aprovação:',
-          Markup.inlineKeyboard(rows)
+          Markup.inlineKeyboard(
+            rows
+          )
         );
       } catch (e) {
         return ctx.reply(
@@ -2004,6 +3282,791 @@ export function startTelegram({ token, adminId }) {
         );
       }
     }
+  });
+
+  bot.action('mp:menu', async (ctx) => {
+    await ctx.answerCbQuery();
+
+    return showMarketplaces(
+      ctx
+    );
+  });
+
+  bot.action(/^mp:toggle:(.+)$/, async (ctx) => {
+    const id =
+      String(
+        ctx.match[1]
+      );
+
+    const catalog =
+      marketplaceCatalog();
+
+    if (!catalog[id]) {
+      return ctx.answerCbQuery(
+        'Marketplace inválido.'
+      );
+    }
+
+    let enabledNow =
+      false;
+
+    updateStore((s) => {
+      const current =
+        new Set(
+          Array.isArray(
+            s.enabledMarketplaces
+          )
+            ? s.enabledMarketplaces
+            : []
+        );
+
+      if (
+        current.has(id)
+      ) {
+        current.delete(id);
+      } else {
+        current.add(id);
+        enabledNow = true;
+      }
+
+      s.enabledMarketplaces = [
+        ...current
+      ];
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      enabledNow
+        ? 'Ativado'
+        : 'Desativado'
+    );
+
+    return showMarketplaces(
+      ctx
+    );
+  });
+
+  bot.action('mp:add', async (ctx) => {
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'marketplace_add_name',
+        mode:
+          'marketplace',
+        data: {}
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Adicionar marketplace'
+    );
+
+    return ctx.reply(
+      '➕ Qual marketplace você quer adicionar?\n\nEx.: Magalu, AliExpress, Temu.\n\nAmazon já aparece como opção pronta no menu de Marketplaces.',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action('mp:deletecustom', async (ctx) => {
+    const custom =
+      readStore()
+        .customMarketplaces ||
+      [];
+
+    await ctx.answerCbQuery();
+
+    if (!custom.length) {
+      return ctx.reply(
+        'Não há marketplace personalizado para excluir.'
+      );
+    }
+
+    return ctx.reply(
+      '🗑️ Qual marketplace personalizado você quer excluir?',
+      Markup.inlineKeyboard(
+        custom.map(
+          (item) => [
+            Markup.button.callback(
+              `🗑️ ${item.name}`,
+              `mp:delete:${item.id}`
+            )
+          ]
+        )
+      )
+    );
+  });
+
+  bot.action(/^mp:delete:(.+)$/, async (ctx) => {
+    const id =
+      String(
+        ctx.match[1]
+      );
+
+    updateStore((s) => {
+      s.customMarketplaces =
+        (
+          s.customMarketplaces ||
+          []
+        ).filter(
+          (x) =>
+            x.id !== id
+        );
+
+      s.enabledMarketplaces =
+        (
+          s.enabledMarketplaces ||
+          []
+        ).filter(
+          (x) =>
+            x !== id
+        );
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Excluído'
+    );
+
+    return showMarketplaces(
+      ctx
+    );
+  });
+
+  bot.action('mp:all', async (ctx) => {
+    updateStore((s) => {
+      s.enabledMarketplaces = [
+        'shopee',
+        'shein',
+        'mercadolivre',
+        'amazon',
+        ...(
+          s.customMarketplaces ||
+          []
+        ).map(
+          (x) => x.id
+        )
+      ];
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Todos ativados'
+    );
+
+    return showMarketplaces(
+      ctx
+    );
+  });
+
+  bot.action('mp:none', async (ctx) => {
+    updateStore((s) => {
+      s.enabledMarketplaces =
+        [];
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Todos desativados'
+    );
+
+    return showMarketplaces(
+      ctx
+    );
+  });
+
+  bot.action('filter:menu', async (ctx) => {
+    await ctx.answerCbQuery();
+
+    return showSearchFilters(
+      ctx
+    );
+  });
+
+  bot.action(/^filter:min:(\d+)$/, async (ctx) => {
+    const value =
+      Math.max(
+        50,
+        Number(
+          ctx.match[1] ||
+          50
+        )
+      );
+
+    updateStore((s) => {
+      s.searchFilters = {
+        ...(s.searchFilters || {}),
+        minSales:
+          value
+      };
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      `Mínimo ${value}`
+    );
+
+    return showSearchFilters(
+      ctx
+    );
+  });
+
+  bot.action(/^filter:limit:(\d+)$/, async (ctx) => {
+    const value =
+      Math.max(
+        5,
+        Math.min(
+          20,
+          Number(
+            ctx.match[1] ||
+            20
+          )
+        )
+      );
+
+    updateStore((s) => {
+      s.searchFilters = {
+        ...(s.searchFilters || {}),
+        resultLimit:
+          value
+      };
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      `Até ${value} produtos`
+    );
+
+    return showSearchFilters(
+      ctx
+    );
+  });
+
+  bot.action('filter:broad', async (ctx) => {
+    updateStore((s) => {
+      const current =
+        s.searchFilters
+          ?.broadSearch !==
+        false;
+
+      s.searchFilters = {
+        ...(s.searchFilters || {}),
+        broadSearch:
+          !current
+      };
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Busca ampla atualizada'
+    );
+
+    return showSearchFilters(
+      ctx
+    );
+  });
+
+  bot.action(/^filter:sort:(.+)$/, async (ctx) => {
+    const value =
+      String(
+        ctx.match[1]
+      );
+
+    if (
+      ![
+        'sales',
+        'discount',
+        'rating',
+        'balanced'
+      ].includes(value)
+    ) {
+      return ctx.answerCbQuery(
+        'Filtro inválido.'
+      );
+    }
+
+    updateStore((s) => {
+      s.searchFilters = {
+        ...(s.searchFilters || {}),
+        sortBy:
+          value
+      };
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Ordenação atualizada'
+    );
+
+    return showSearchFilters(
+      ctx
+    );
+  });
+
+  bot.action(/^q:page:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+
+    return showQueueManager(
+      ctx,
+      Number(
+        ctx.match[1]
+      )
+    );
+  });
+
+  bot.action(/^q:open:(\d+):(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+
+    return showQueueItem(
+      ctx,
+      Number(
+        ctx.match[1]
+      ),
+      Number(
+        ctx.match[2]
+      )
+    );
+  });
+
+  bot.action(/^q:edittext:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (
+      !readStore().queue?.[index]
+    ) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_edit_text',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Editar texto'
+    );
+
+    return ctx.reply(
+      '✏️ Envie o NOVO texto completo dessa oferta.\n\nO link continuará separado e não precisa ser colocado no texto.',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:editlink:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (
+      !readStore().queue?.[index]
+    ) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_edit_link',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Editar link'
+    );
+
+    return ctx.reply(
+      '🔗 Cole o NOVO link de afiliada que deve ser enviado nessa oferta.',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:editphoto:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (
+      !readStore().queue?.[index]
+    ) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_edit_photo',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Trocar foto'
+    );
+
+    return ctx.reply(
+      '📸 Envie a nova foto dessa oferta.',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:up:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (index <= 0) {
+      return ctx.answerCbQuery(
+        'Já está no topo.'
+      );
+    }
+
+    moveQueueItem(
+      index,
+      index - 1
+    );
+
+    await ctx.answerCbQuery(
+      'Subiu uma posição'
+    );
+
+    return showQueueItem(
+      ctx,
+      index - 1,
+      page
+    );
+  });
+
+  bot.action(/^q:down:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const queue =
+      readStore().queue ||
+      [];
+
+    if (
+      index >=
+      queue.length - 1
+    ) {
+      return ctx.answerCbQuery(
+        'Já está no fim.'
+      );
+    }
+
+    moveQueueItem(
+      index,
+      index + 1
+    );
+
+    await ctx.answerCbQuery(
+      'Desceu uma posição'
+    );
+
+    return showQueueItem(
+      ctx,
+      index + 1,
+      page
+    );
+  });
+
+  bot.action(/^q:top:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    if (index <= 0) {
+      return ctx.answerCbQuery(
+        'Já está no topo.'
+      );
+    }
+
+    moveQueueItem(
+      index,
+      0
+    );
+
+    await ctx.answerCbQuery(
+      'Movida para o topo'
+    );
+
+    return showQueueItem(
+      ctx,
+      0,
+      0
+    );
+  });
+
+  bot.action(/^q:bottom:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const queue =
+      readStore().queue ||
+      [];
+
+    if (
+      index >=
+      queue.length - 1
+    ) {
+      return ctx.answerCbQuery(
+        'Já está no fim.'
+      );
+    }
+
+    moveQueueItem(
+      index,
+      queue.length - 1
+    );
+
+    await ctx.answerCbQuery(
+      'Movida para o fim'
+    );
+
+    const newIndex =
+      queue.length - 1;
+
+    return showQueueItem(
+      ctx,
+      newIndex,
+      Math.floor(
+        newIndex /
+        8
+      )
+    );
+  });
+
+  bot.action(/^q:move:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const queue =
+      readStore().queue ||
+      [];
+
+    if (!queue[index]) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_move_position',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Mover oferta'
+    );
+
+    return ctx.reply(
+      `🔢 Digite a nova posição dessa oferta, de 1 a ${queue.length}.`,
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:delete:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const item =
+      readStore().queue?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    await ctx.answerCbQuery();
+
+    return ctx.reply(
+      `🗑️ Excluir da fila?\n\n${queueItemTitle(
+        item
+      )}`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '✅ Sim, excluir',
+            `q:deleteconfirm:${index}:${page}`
+          ),
+          Markup.button.callback(
+            '❌ Não',
+            `q:open:${index}:${page}`
+          )
+        ]
+      ])
+    );
+  });
+
+  bot.action(/^q:deleteconfirm:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    updateStore((s) => {
+      if (
+        Array.isArray(
+          s.queue
+        ) &&
+        s.queue[index]
+      ) {
+        s.queue.splice(
+          index,
+          1
+        );
+      }
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Excluída'
+    );
+
+    await ctx.reply(
+      '🗑️ Oferta removida da fila.'
+    );
+
+    const queue =
+      readStore().queue ||
+      [];
+
+    if (!queue.length) {
+      return ctx.reply(
+        '📦 A fila ficou vazia.',
+        mainMenu()
+      );
+    }
+
+    return showQueueManager(
+      ctx,
+      Math.min(
+        page,
+        Math.floor(
+          (queue.length - 1) /
+          8
+        )
+      )
+    );
   });
 
   bot.action('results:shopee', async (ctx) => {
@@ -2432,32 +4495,49 @@ export function startTelegram({ token, adminId }) {
   });
 
   bot.action(/^sp:(.+)$/, async (ctx) => {
-    const platform = ctx.match[1];
+    const platform =
+      ctx.match[1];
 
     await ctx.answerCbQuery();
 
-    if (!['shopee', 'shein', 'mercadolivre'].includes(platform)) {
+    if (
+      !automaticMarketplaces()
+        .includes(
+          platform
+        )
+    ) {
       return ctx.reply(
-        '⚠️ Marketplace não disponível nessa busca.',
+        '⚠️ Esse marketplace não está ativo para pesquisa automática. Para Amazon e marketplaces personalizados, use 🔗 Oferta por link.',
         mainMenu()
       );
     }
 
-    drafts.set(ctx.from.id, {
-      step: 'search_keyword',
-      mode: 'search',
-      data: { platform }
-    });
+    const filters =
+      searchFilterState();
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'search_keyword',
+        mode:
+          'search',
+        data: {
+          platform
+        }
+      }
+    );
 
     return ctx.reply(
       `${marketplaceLabel(platform)}\n\n` +
         'Digite o que quer procurar.\n' +
         'Ex.: perfume, vestido, cafeteira, mochila, skincare, cadeira, chocolate…\n\n' +
-        '🔐 Só entram resultados com 50+ vendas confirmadas.',
-      Markup.keyboard([[BTN.cancel]]).resize()
+        `🎛️ Filtros: ${filters.minSales}+ vendas • até ${filters.resultLimit} produtos • ${filters.broadSearch ? 'busca ampla' : 'busca exata'}.`,
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
     );
   });
-
 
   bot.action(/^pick:(\d+)$/, async (ctx) => {
     const p = lastSearch[Number(ctx.match[1])];
@@ -2470,9 +4550,17 @@ export function startTelegram({ token, adminId }) {
       'Abrindo Caixa de aprovação…'
     );
 
-    if (Number(p.sales || 0) < 50) {
+    const filters =
+      searchFilterState();
+
+    if (
+      Number(
+        p.sales || 0
+      ) <
+      filters.minSales
+    ) {
       return ctx.reply(
-        '⚠️ Esse produto foi bloqueado porque não tem 50+ vendas confirmadas.',
+        `⚠️ Esse produto foi bloqueado porque não tem ${filters.minSales}+ vendas confirmadas.`,
         mainMenu()
       );
     }

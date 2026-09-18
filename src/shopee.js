@@ -55,7 +55,9 @@ function shopeeKeywordVariants(keyword) {
     .trim()
     .replace(/\s+/g, ' ');
 
-  if (!raw) return [];
+  if (!raw) {
+    return [];
+  }
 
   const stop = new Set([
     'a','o','as','os',
@@ -65,15 +67,17 @@ function shopeeKeywordVariants(keyword) {
     'um','uma'
   ]);
 
-  const words = raw
-    .split(/\s+/)
-    .filter(Boolean);
+  const words =
+    raw.split(/\s+/)
+      .filter(Boolean);
 
-  const useful = words.filter(
-    (w) => !stop.has(
-      w.toLowerCase()
-    )
-  );
+  const useful =
+    words.filter(
+      (w) =>
+        !stop.has(
+          w.toLowerCase()
+        )
+    );
 
   const variants = [
     raw
@@ -86,7 +90,19 @@ function shopeeKeywordVariants(keyword) {
 
     variants.push(
       useful
+        .slice(0, 3)
+        .join(' ')
+    );
+
+    variants.push(
+      useful
         .slice(0, 2)
+        .join(' ')
+    );
+
+    variants.push(
+      useful
+        .slice(-2)
         .join(' ')
     );
   }
@@ -97,63 +113,153 @@ function shopeeKeywordVariants(keyword) {
     );
   }
 
-  if (useful.length >= 1) {
-    variants.push(
-      useful[0]
-    );
+  for (
+    const word of
+    useful.slice(0, 3)
+  ) {
+    variants.push(word);
   }
 
   return [
     ...new Set(
       variants
-        .map((x) => x.trim())
+        .map(
+          (x) =>
+            x.trim()
+        )
         .filter(Boolean)
     )
-  ].slice(0, 5);
+  ].slice(0, 8);
+}
+
+function sortShopeeProducts(
+  list,
+  sortBy = 'sales'
+) {
+  const rows =
+    [...list];
+
+  if (sortBy === 'discount') {
+    return rows.sort(
+      (a, b) =>
+        Number(
+          b.discountPct || 0
+        ) -
+        Number(
+          a.discountPct || 0
+        )
+    );
+  }
+
+  if (sortBy === 'rating') {
+    return rows.sort(
+      (a, b) =>
+        Number(
+          b.rating || 0
+        ) -
+        Number(
+          a.rating || 0
+        )
+    );
+  }
+
+  if (sortBy === 'balanced') {
+    return rows.sort(
+      (a, b) =>
+        Number(
+          b.score || 0
+        ) -
+        Number(
+          a.score || 0
+        )
+    );
+  }
+
+  return rows.sort(
+    (a, b) =>
+      Number(
+        b.sales || 0
+      ) -
+      Number(
+        a.sales || 0
+      )
+  );
 }
 
 export async function searchShopeeOffersBroad(
   keyword,
   {
     minSales = 50,
-    desired = 8,
-    pages = 3,
+    desired = 20,
+    pages = 5,
     limitPerPage = 20,
-    sortType = 5
+    sortType = 5,
+    broadSearch = true,
+    sortBy = 'sales'
   } = {}
 ) {
   const variants =
-    shopeeKeywordVariants(keyword);
+    broadSearch
+      ? shopeeKeywordVariants(
+          keyword
+        )
+      : [
+          String(
+            keyword || ''
+          ).trim()
+        ].filter(Boolean);
 
   if (!variants.length) {
     return [];
   }
 
   const found = [];
-  const seen = new Set();
+  const seen =
+    new Set();
 
-  for (const term of variants) {
+  for (
+    const term of
+    variants
+  ) {
     for (
       let page = 1;
-      page <= Math.max(1, pages);
+      page <=
+      Math.max(
+        1,
+        Number(pages || 1)
+      );
       page += 1
     ) {
       let rows = [];
 
       try {
-        rows = await searchShopeeOffers(
-          term,
-          {
-            page,
-            limit: limitPerPage,
-            sortType
-          }
-        );
+        rows =
+          await searchShopeeOffers(
+            term,
+            {
+              page,
+              limit:
+                Math.min(
+                  20,
+                  Math.max(
+                    1,
+                    Number(
+                      limitPerPage ||
+                      20
+                    )
+                  )
+                ),
+              sortType
+            }
+          );
       } catch {
         rows = [];
       }
 
-      for (const product of rows) {
+      for (
+        const product of
+        rows
+      ) {
         const key =
           `${product.shopId || ''}:${product.itemId || ''}`;
 
@@ -162,7 +268,9 @@ export async function searchShopeeOffersBroad(
           !product.shopId ||
           !product.name ||
           !product.productLink ||
-          Number(product.price || 0) <= 0 ||
+          Number(
+            product.price || 0
+          ) <= 0 ||
           seen.has(key)
         ) {
           continue;
@@ -171,8 +279,15 @@ export async function searchShopeeOffersBroad(
         seen.add(key);
 
         if (
-          Number(product.sales || 0) <
-          Math.max(0, Number(minSales || 0))
+          Number(
+            product.sales || 0
+          ) <
+          Math.max(
+            50,
+            Number(
+              minSales || 50
+            )
+          )
         ) {
           continue;
         }
@@ -182,39 +297,43 @@ export async function searchShopeeOffersBroad(
 
       if (
         found.length >=
-        Math.max(1, Number(desired || 8))
-      ) {
-        return found
-          .sort(
-            (a, b) =>
-              Number(b.sales || 0) -
-              Number(a.sales || 0)
+        Math.max(
+          1,
+          Number(
+            desired || 20
           )
-          .slice(
-            0,
-            Math.max(
-              1,
-              Number(desired || 8)
+        )
+      ) {
+        return sortShopeeProducts(
+          found,
+          sortBy
+        ).slice(
+          0,
+          Math.max(
+            1,
+            Number(
+              desired || 20
             )
-          );
+          )
+        );
       }
     }
   }
 
-  return found
-    .sort(
-      (a, b) =>
-        Number(b.sales || 0) -
-        Number(a.sales || 0)
-    )
-    .slice(
-      0,
-      Math.max(
-        1,
-        Number(desired || 8)
+  return sortShopeeProducts(
+    found,
+    sortBy
+  ).slice(
+    0,
+    Math.max(
+      1,
+      Number(
+        desired || 20
       )
-    );
+    )
+  );
 }
+
 
 export async function getShopeeProduct({ itemId, shopId }) {
   const list = await searchShopeeOffers('', { itemId: Number(itemId), shopId: Number(shopId), limit: 10, sortType: 1 });
