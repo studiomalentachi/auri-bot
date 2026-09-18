@@ -30,30 +30,107 @@ const MIN_SALES = () => {
 
 function nextCategories() {
   const s = readStore();
-  const list =
+
+  const general =
     config.discoveryKeywords.length
       ? config.discoveryKeywords
       : ['achadinhos'];
 
-  let idx =
-    Number(s.discoveryKeywordIndex || 0);
+  const home =
+    Array.isArray(
+      config.discoveryHomeKeywords
+    ) &&
+    config.discoveryHomeKeywords.length
+      ? config.discoveryHomeKeywords
+      : [
+          'móveis para casa',
+          'eletrodomésticos para casa'
+        ];
+
+  let generalIdx =
+    Number(
+      s.discoveryKeywordIndex ||
+      0
+    );
+
+  let homeIdx =
+    Number(
+      s.discoveryHomeKeywordIndex ||
+      0
+    );
+
+  const total =
+    Math.max(
+      4,
+      Number(
+        config.discoveryCategoriesPerRun ||
+        12
+      )
+    );
+
+  // Em TODA rodada, uma parte da pesquisa é reservada para casa.
+  // Assim móveis/eletrodomésticos não ficam "perdidos" no meio
+  // de uma lista enorme de categorias.
+  const homeSlots =
+    Math.max(
+      4,
+      Math.min(
+        6,
+        Math.ceil(
+          total * 0.4
+        )
+      )
+    );
 
   const picked = [];
 
   for (
     let i = 0;
-    i < config.discoveryCategoriesPerRun;
+    i < homeSlots;
     i += 1
   ) {
     picked.push(
-      list[idx % list.length]
+      home[
+        homeIdx %
+        home.length
+      ]
     );
-    idx += 1;
+
+    homeIdx += 1;
+  }
+
+  while (
+    picked.length <
+    total
+  ) {
+    const keyword =
+      general[
+        generalIdx %
+        general.length
+      ];
+
+    generalIdx += 1;
+
+    if (
+      !picked.includes(
+        keyword
+      )
+    ) {
+      picked.push(
+        keyword
+      );
+    }
   }
 
   updateStore((x) => {
     x.discoveryKeywordIndex =
-      idx % list.length;
+      generalIdx %
+      general.length;
+
+    x.discoveryHomeKeywordIndex =
+      homeIdx %
+      home.length;
+
     return x;
   });
 
@@ -1036,15 +1113,7 @@ export async function discoverWebOffers({
     ...shopee,
     ...ml,
     ...shein
-  ].sort(
-    (a, b) =>
-      Number(
-        b.verifiedScore || 0
-      ) -
-      Number(
-        a.verifiedScore || 0
-      )
-  );
+  ];
 
   const existing =
     existingKeys();
@@ -1053,9 +1122,7 @@ export async function discoverWebOffers({
   const seen =
     new Set();
 
-  // Tenta ter variedade de marketplace primeiro.
-  for (
-    const platform of
+  const supportedPlatforms =
     [
       'shopee',
       'mercadolivre',
@@ -1063,94 +1130,156 @@ export async function discoverWebOffers({
     ].filter(
       (platform) =>
         enabled.has(platform)
-    )
-  ) {
-    const p =
-      combined.find(
-        (x) =>
-          x.platform ===
-            platform &&
-          Number(
-            x.sales || 0
-          ) >= MIN_SALES()
-      );
+    );
 
-    if (!p) {
-      continue;
-    }
-
-    const k =
-      productKey(
-        p,
-        p.publicLink ||
-        p.canonicalUrl
-      );
-
-    if (
-      k &&
-      !existing.has(k) &&
-      !seen.has(k)
-    ) {
-      seen.add(k);
-      selected.push(p);
-    }
-  }
+  // Cria uma fila separada para cada marketplace.
+  // Dentro de cada um, os melhores ficam primeiro.
+  const buckets = {};
 
   for (
-    const p of
-    combined
+    const platform of
+    supportedPlatforms
   ) {
-    if (
-      selected.length >=
-      config.discoveryMaxPerRun
-    ) {
-      break;
-    }
-
-    // Última trava: 100 ou menos nunca passa.
-    if (
-      Number(p.sales || 0) <
-      MIN_SALES()
-    ) {
-      continue;
-    }
-
-    if (
-      !p.factsVerified ||
-      !p.name ||
-      Number(p.price || 0) <= 0 ||
-      !(
-        p.publicLink ||
-        p.canonicalUrl
-      )
-    ) {
-      continue;
-    }
-
-    const k =
-      productKey(
-        p,
-        p.publicLink ||
-        p.canonicalUrl
-      );
-
-    if (
-      !k ||
-      existing.has(k) ||
-      seen.has(k) ||
-      isDuplicate(
-        p,
-        p.affiliateLink ||
-        p.publicLink ||
-        p.canonicalUrl
-      )
-    ) {
-      continue;
-    }
-
-    seen.add(k);
-    selected.push(p);
+    buckets[platform] =
+      combined
+        .filter(
+          (p) =>
+            p.platform ===
+              platform &&
+            Number(
+              p.sales || 0
+            ) >=
+              MIN_SALES() &&
+            p.factsVerified &&
+            p.name &&
+            Number(
+              p.price || 0
+            ) > 0 &&
+            (
+              p.publicLink ||
+              p.canonicalUrl
+            )
+        )
+        .sort(
+          (a, b) =>
+            Number(
+              b.verifiedScore ||
+              0
+            ) -
+            Number(
+              a.verifiedScore ||
+              0
+            )
+        );
   }
+
+  // A ordem inicial muda a cada rodada:
+  // Shopee -> ML -> SHEIN,
+  // depois ML -> SHEIN -> Shopee,
+  // depois SHEIN -> Shopee -> ML...
+  // Assim a caixa não fica sempre começando pela mesma loja.
+  const rotation =
+    supportedPlatforms.length
+      ? Number(
+          state.discoveryMarketplaceRotation ||
+          0
+        ) %
+        supportedPlatforms.length
+      : 0;
+
+  const platformOrder =
+    supportedPlatforms.length
+      ? [
+          ...supportedPlatforms.slice(
+            rotation
+          ),
+          ...supportedPlatforms.slice(
+            0,
+            rotation
+          )
+        ]
+      : [];
+
+  let madeProgress =
+    true;
+
+  // Round-robin de verdade:
+  // pega 1 da Shopee, 1 do ML, 1 da SHEIN e repete.
+  // Se um marketplace não tiver mais resultados válidos,
+  // os outros continuam preenchendo as vagas.
+  while (
+    selected.length <
+      config.discoveryMaxPerRun &&
+    madeProgress
+  ) {
+    madeProgress =
+      false;
+
+    for (
+      const platform of
+      platformOrder
+    ) {
+      if (
+        selected.length >=
+        config.discoveryMaxPerRun
+      ) {
+        break;
+      }
+
+      const bucket =
+        buckets[platform] ||
+        [];
+
+      while (
+        bucket.length
+      ) {
+        const p =
+          bucket.shift();
+
+        const k =
+          productKey(
+            p,
+            p.publicLink ||
+            p.canonicalUrl
+          );
+
+        if (
+          !k ||
+          existing.has(k) ||
+          seen.has(k) ||
+          isDuplicate(
+            p,
+            p.affiliateLink ||
+            p.publicLink ||
+            p.canonicalUrl
+          )
+        ) {
+          continue;
+        }
+
+        seen.add(k);
+        selected.push(p);
+        madeProgress =
+          true;
+
+        break;
+      }
+    }
+  }
+
+  updateStore((x) => {
+    if (
+      supportedPlatforms.length
+    ) {
+      x.discoveryMarketplaceRotation =
+        (
+          rotation + 1
+        ) %
+        supportedPlatforms.length;
+    }
+
+    return x;
+  });
 
   const suggestions = [];
 

@@ -1635,6 +1635,8 @@ async function showDiscovery(ctx) {
       `Pesquisa automática: ${marketplaceNames(
         automaticMarketplaces()
       )}\n` +
+      `🏠 Casa: móveis + eletrodomésticos entram em todas as rodadas\n` +
+      `🔄 Variedade: alternância equilibrada entre Shopee, Mercado Livre e SHEIN\n` +
       `Outros ativos por link: ${marketplaceNames(
         enabledMarketplaces()
           .filter(
