@@ -16,8 +16,8 @@ import {
 
 const MIN_SALES = () =>
   Math.max(
-    101,
-    Number(config.discoveryMinSales || 101)
+    50,
+    Number(config.discoveryMinSales || 50)
   );
 
 function nextCategories() {
@@ -165,7 +165,7 @@ async function discoverShopee(categories) {
         const sales =
           countNumber(row.sales);
 
-        // Mais de 100 vendas = 101 ou mais.
+        // Pelo menos 50 vendas = 50 ou mais.
         if (sales < MIN_SALES()) {
           continue;
         }

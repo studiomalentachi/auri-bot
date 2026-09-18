@@ -23,7 +23,7 @@ export const config = {
   discoveryMaxPerRun: Math.max(5, envInt('AUTO_DISCOVERY_MAX_PER_RUN', 20)),
   discoveryDailyTarget: Math.max(1, envInt('AUTO_DISCOVERY_DAILY_TARGET', 85)),
   discoverySuggestionCap: Math.max(50, envInt('AUTO_DISCOVERY_SUGGESTION_CAP', 180)),
-  discoveryMinSales: Math.max(101, envInt('AUTO_DISCOVERY_MIN_SALES', 101)),
+  discoveryMinSales: Math.max(50, envInt('AUTO_DISCOVERY_MIN_SALES', 50)),
   discoveryCategoriesPerRun: Math.max(2, Math.min(12, envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 8))),
   discoveryKeywords: env(
     'AUTO_DISCOVERY_KEYWORDS',

@@ -464,7 +464,7 @@ async function beginSearch(ctx) {
 
   await ctx.reply(
     '🔎 Onde quer buscar?\n\n' +
-      'A Auri só mostra produtos com MAIS de 100 vendas confirmadas.',
+      'A Auri só mostra produtos com pelo menos 50 vendas confirmadas.',
     Markup.inlineKeyboard([
       [
         Markup.button.callback('🧡 Shopee', 'sp:shopee'),
@@ -1928,7 +1928,7 @@ export function startTelegram({ token, adminId }) {
       drafts.delete(ctx.from.id);
 
       await ctx.reply(
-        '🔎 Buscando produtos reais com 101+ vendas…'
+        '🔎 Buscando produtos reais com 50+ vendas…'
       );
 
       try {
@@ -1945,7 +1945,7 @@ export function startTelegram({ token, adminId }) {
         }
 
         lastSearch = found
-          .filter((p) => Number(p.sales || 0) >= 101)
+          .filter((p) => Number(p.sales || 0) >= 50)
           .sort(
             (a, b) =>
               Number(b.sales || 0) -
@@ -1954,7 +1954,7 @@ export function startTelegram({ token, adminId }) {
 
         if (!lastSearch.length) {
           return ctx.reply(
-            '⚠️ Não encontrei nessa busca nenhum produto que eu consiga confirmar com 101+ vendas.\n\n' +
+            '⚠️ Não encontrei nessa busca nenhum produto que eu consiga confirmar com 50+ vendas.\n\n' +
               'Tente outro termo. A Auri não vai completar ou inventar número de vendas.',
             mainMenu()
           );
@@ -1971,7 +1971,7 @@ export function startTelegram({ token, adminId }) {
 
         return ctx.reply(
           `${marketplaceLabel(platform)}\n\n` +
-            `✅ ${lastSearch.length} produto(s) com 101+ vendas confirmadas.\n` +
+            `✅ ${lastSearch.length} produto(s) com 50+ vendas confirmadas.\n` +
             'Escolha um para abrir na Caixa de aprovação:',
           Markup.inlineKeyboard(rows)
         );
@@ -2431,7 +2431,7 @@ export function startTelegram({ token, adminId }) {
       `${marketplaceLabel(platform)}\n\n` +
         'Digite o que quer procurar.\n' +
         'Ex.: perfume, vestido, cafeteira, mochila, skincare, cadeira, chocolate…\n\n' +
-        '🔐 Só entram resultados com 101+ vendas confirmadas.',
+        '🔐 Só entram resultados com 50+ vendas confirmadas.',
       Markup.keyboard([[BTN.cancel]]).resize()
     );
   });
@@ -2448,9 +2448,9 @@ export function startTelegram({ token, adminId }) {
       'Abrindo Caixa de aprovação…'
     );
 
-    if (Number(p.sales || 0) < 101) {
+    if (Number(p.sales || 0) < 50) {
       return ctx.reply(
-        '⚠️ Esse produto foi bloqueado porque não tem 101+ vendas confirmadas.',
+        '⚠️ Esse produto foi bloqueado porque não tem 50+ vendas confirmadas.',
         mainMenu()
       );
     }
