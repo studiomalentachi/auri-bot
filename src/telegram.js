@@ -687,6 +687,23 @@ async function renderApprovalCard(ctx, item) {
     );
   }
 
+  const coupon =
+    String(
+      product.couponCode ||
+      product.coupon ||
+      ''
+    ).trim();
+
+  const hasVerifiedCoupon =
+    product.couponVerified === true &&
+    Boolean(coupon);
+
+  if (hasVerifiedCoupon) {
+    facts.push(
+      `🎟️ Cupom informado por você: ${coupon}`
+    );
+  }
+
   const rows = [];
 
   if (publicLink) {
@@ -727,6 +744,23 @@ async function renderApprovalCard(ctx, item) {
 
   rows.push([
     Markup.button.callback(
+      hasVerifiedCoupon
+        ? '🎟️ Alterar cupom'
+        : '🎟️ Adicionar cupom',
+      `coupon:${id}`
+    ),
+    ...(hasVerifiedCoupon
+      ? [
+          Markup.button.callback(
+            '🚫 Remover cupom',
+            `couponremove:${id}`
+          )
+        ]
+      : [])
+  ]);
+
+  rows.push([
+    Markup.button.callback(
       '✏️ Editar texto',
       `edit:${id}`
     ),
@@ -761,26 +795,27 @@ async function renderApprovalCard(ctx, item) {
       ? `📥 ${current.index + 1} de ${current.total}`
       : `📥 Caixa de aprovação`;
 
+  const linkStatus =
+    hasAutomaticAffiliateLink
+      ? '✅ Link automático da Shopee disponível para conferência'
+      : '⏳ Falta colocar/confirmar seu link de afiliada';
+
+  const couponStatus =
+    hasVerifiedCoupon
+      ? `✅ ${coupon}`
+      : '— nenhum cupom adicionado';
+
   await ctx.reply(
-    `${numberText}\n\n` +
-      `${marketplaceLabel(product.platform)}\n` +
-      `📦 ${product.name || 'Produto'}\n` +
-      `${facts.length ? `\n${facts.join('\n')}\n` : ''}` +
-      `\n✍️ TEXTO PRONTO\n\n${data.text || ''}\n\n` +
-      `🔗 Link público confirmado:\n${publicLink || 'não disponível'}\n\n` +
-      (
-        hasAutomaticAffiliateLink
-          ? (
-              `✅ Link de afiliada recebido da Shopee Affiliate Open API\n` +
-              `Origem: ${
-                product.affiliateLinkSource === 'generateShortLink'
-                  ? 'generateShortLink'
-                  : 'offerLink'
-              }\n` +
-              `Você pode abrir o link antes de usar ou substituí-lo pelo seu.`
-            )
-          : `⏳ Link de afiliada: ainda não confirmado`
-      ),
+    `✨ OPORTUNIDADE PARA APROVAÇÃO\n` +
+      `${numberText}\n\n` +
+      `${marketplaceLabel(product.platform)} • ✅ dados verificados\n` +
+      `📦 ${product.name || 'Produto'}\n\n` +
+      `${facts.length ? `${facts.join('\n')}\n\n` : ''}` +
+      `🎟️ CUPOM\n${couponStatus}\n\n` +
+      `🔗 LINK DE AFILIADA\n${linkStatus}\n\n` +
+      `✍️ TEXTO PARA O GRUPO\n\n${data.text || ''}\n\n` +
+      `────────────\n` +
+      `Antes de salvar, confira produto, link e texto.`,
     Markup.inlineKeyboard(rows)
   );
 }
@@ -1721,6 +1756,79 @@ export function startTelegram({ token, adminId }) {
       return previewOffer(ctx, d);
     }
 
+    if (d.step === 'suggestion_coupon') {
+      const value =
+        String(text || '').trim();
+
+      if (
+        !value ||
+        /^sem cupom$/i.test(value) ||
+        isNo(value)
+      ) {
+        delete d.data.product.couponCode;
+        delete d.data.product.coupon;
+        d.data.product.couponVerified = false;
+
+        saveSuggestionDraft(d);
+
+        d.step = 'suggestion_review';
+        drafts.set(ctx.from.id, d);
+
+        await ctx.reply(
+          '✅ Cupom removido. A Auri não vai mencionar cupom nessa oferta.',
+          Markup.removeKeyboard()
+        );
+
+        return renderApprovalCard(
+          ctx,
+          d.data
+        );
+      }
+
+      d.data.product.couponCode =
+        value;
+
+      d.data.product.couponVerified =
+        true;
+
+      // Se o texto ainda era da IA, atualiza para poder incluir
+      // o cupom informado. Se você já editou manualmente, preserva.
+      if (
+        d.data.aiGenerated !== false &&
+        !d.data.manuallyEdited
+      ) {
+        const copy =
+          await generateOfferCopy(
+            d.data.product,
+            'Inclua o cupom somente porque ele foi informado e confirmado pela usuária. Não invente regra, validade, valor mínimo ou benefício além do texto exato do cupom.'
+          );
+
+        d.data.text =
+          copy.text;
+
+        d.data.aiProvider =
+          copy.provider;
+
+        d.data.aiGenerated =
+          true;
+      }
+
+      saveSuggestionDraft(d);
+
+      d.step = 'suggestion_review';
+      drafts.set(ctx.from.id, d);
+
+      await ctx.reply(
+        '✅ Cupom adicionado. Ele só será usado porque VOCÊ informou esse cupom.',
+        Markup.removeKeyboard()
+      );
+
+      return renderApprovalCard(
+        ctx,
+        d.data
+      );
+    }
+
     if (d.step === 'suggestion_affiliate_link') {
       const affiliateUrl =
         String(text || '').trim();
@@ -1898,6 +2006,81 @@ export function startTelegram({ token, adminId }) {
     await ctx.reply(
       '💜 Painel da Auri',
       mainMenu()
+    );
+  });
+
+  bot.action(/^coupon:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = String(ctx.match[1]);
+
+    if (
+      !d ||
+      String(d.data.id) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    d.step =
+      'suggestion_coupon';
+
+    drafts.set(
+      ctx.from.id,
+      d
+    );
+
+    await ctx.answerCbQuery(
+      'Adicionar cupom'
+    );
+
+    return ctx.reply(
+      '🎟️ Envie o cupom EXATAMENTE como ele aparece no anúncio/app/painel oficial.\\n\\n' +
+        'Pode ser o código (ex.: CUPOM10) ou a condição completa que você conferiu.\\n\\n' +
+        'A Auri NÃO pesquisa nem inventa cupons por conta própria. Se não tiver, envie “Sem cupom”.',
+      Markup.keyboard([
+        ['Sem cupom'],
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^couponremove:(.+)$/, async (ctx) => {
+    const d = drafts.get(ctx.from.id);
+    const id = String(ctx.match[1]);
+
+    if (
+      !d ||
+      String(d.data.id) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    if (d.data.product) {
+      delete d.data.product.couponCode;
+      delete d.data.product.coupon;
+      d.data.product.couponVerified = false;
+    }
+
+    saveSuggestionDraft(d);
+
+    d.step =
+      'suggestion_review';
+
+    drafts.set(
+      ctx.from.id,
+      d
+    );
+
+    await ctx.answerCbQuery(
+      'Cupom removido'
+    );
+
+    return renderApprovalCard(
+      ctx,
+      d.data
     );
   });
 

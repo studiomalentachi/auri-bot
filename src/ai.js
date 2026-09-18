@@ -104,18 +104,60 @@ function money(v) {
 }
 
 function facts(product) {
-  if (Array.isArray(product?.verifiedFacts) && product.verifiedFacts.length) {
-    return product.verifiedFacts.map(String).filter(Boolean);
+  const out =
+    Array.isArray(product?.verifiedFacts) &&
+    product.verifiedFacts.length
+      ? product.verifiedFacts
+          .map(String)
+          .filter(Boolean)
+      : [];
+
+  if (!out.length) {
+    if (product?.name) {
+      out.push(`Nome: ${product.name}`);
+    }
+
+    if (money(product?.price)) {
+      out.push(
+        `Preço: ${money(product.price)}`
+      );
+    }
+
+    if (Number(product?.sales || 0) > 0) {
+      out.push(
+        `Vendas: ${Number(product.sales).toLocaleString('pt-BR')}`
+      );
+    }
+
+    if (Number(product?.rating || 0) > 0) {
+      out.push(
+        `Nota: ${Number(product.rating).toFixed(1).replace('.', ',')}`
+      );
+    }
   }
-  const out = [];
-  if (product?.name) out.push(`Nome: ${product.name}`);
-  if (money(product?.price)) out.push(`Preço: ${money(product.price)}`);
-  if (Number(product?.sales || 0) > 0) {
-    out.push(`Vendas: ${Number(product.sales).toLocaleString('pt-BR')}`);
+
+  const coupon =
+    String(
+      product?.couponCode ||
+      product?.coupon ||
+      ''
+    ).trim();
+
+  if (
+    product?.couponVerified === true &&
+    coupon &&
+    !out.some(
+      (x) =>
+        String(x)
+          .toLowerCase()
+          .includes('cupom')
+    )
+  ) {
+    out.push(
+      `Cupom informado e confirmado pela usuária: ${coupon}`
+    );
   }
-  if (Number(product?.rating || 0) > 0) {
-    out.push(`Nota: ${Number(product.rating).toFixed(1).replace('.', ',')}`);
-  }
+
   return out;
 }
 
@@ -149,6 +191,22 @@ export function fallbackOfferCopy(product) {
   if (rating > 0) {
     lines.push(`\n⭐ Nota ${rating.toFixed(1).replace('.', ',')}`);
   }
+
+  const coupon = String(
+    product?.couponCode ||
+    product?.coupon ||
+    ''
+  ).trim();
+
+  if (
+    product?.couponVerified === true &&
+    coupon
+  ) {
+    lines.push(
+      `\n🎟️ Cupom: *${coupon}*`
+    );
+  }
+
   return lines.join('\n');
 }
 
