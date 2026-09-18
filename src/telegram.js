@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { Telegraf, Markup } from 'telegraf';
 import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
-import { discoverWebOffers } from './discovery.js';
+import { discoverWebOffers, searchSheinOffers } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
 import { getShopeeConversions, isShopeeConfigured } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
@@ -72,7 +72,8 @@ function statusText() {
     `Fila: ${s.queue.length}\n` +
     `Automação: ${s.paused ? '⏸️ pausada' : '✅ ativa'}\n` +
     `Horário: 08:00–22:00 | ${config.sendIntervalMinutes} min | até 85/dia\n` +
-    `IA escolhida: ${s.aiProvider || 'auto'} | disponíveis: ${aiOn}\n` +
+    `IA escolhida: ${s.aiProvider || 'auto'} | chaves disponíveis: ${aiOn}\n` +
+    `IA automática: ${process.env.GEMINI_API_KEY ? 'Gemini' : 'fallback configurado'}\n` +
     `Shopee Open API: ${isShopeeConfigured() ? '✅' : '⚠️ não configurada'}\n` +
     `Mercado Livre API: ${meliOAuthStatus().authorized ? '✅ conectada' : (meliOAuthStatus().configured ? '⚠️ falta autorizar (/meli)' : '⚠️ não configurada')}\n` +
     `Auto busca: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'} | ` +
@@ -462,11 +463,12 @@ async function beginSearch(ctx) {
   });
 
   await ctx.reply(
-    'Onde quer buscar?',
+    '🔎 Onde quer buscar?\n\n' +
+      'A Auri só mostra produtos com MAIS de 100 vendas confirmadas.',
     Markup.inlineKeyboard([
       [
         Markup.button.callback('🧡 Shopee', 'sp:shopee'),
-        Markup.button.callback('🛒 Amazon', 'sp:amazon')
+        Markup.button.callback('🖤 SHEIN', 'sp:shein')
       ],
       [
         Markup.button.callback('💛 Mercado Livre', 'sp:mercadolivre')
@@ -1817,63 +1819,59 @@ export function startTelegram({ token, adminId }) {
       const platform = d.data.platform;
       drafts.delete(ctx.from.id);
 
-      await ctx.reply('🔎 Buscando…');
+      await ctx.reply(
+        '🔎 Buscando produtos reais com 101+ vendas…'
+      );
 
       try {
-        const found = await searchMarketplace(
-          platform,
-          text,
-          platform === 'shopee' ? 20 : 8
-        );
+        let found = [];
 
-        // Na Shopee, a regra é dura: só mostramos produtos
-        // com MAIS de 100 vendas (mínimo 101).
-        lastSearch =
-          platform === 'shopee'
-            ? found
-                .filter(
-                  (p) =>
-                    Number(p.sales || 0) >= 101
-                )
-                .sort(
-                  (a, b) =>
-                    Number(b.sales || 0) -
-                    Number(a.sales || 0)
-                )
-            : found;
+        if (platform === 'shein') {
+          found = await searchSheinOffers(text, 8);
+        } else {
+          found = await searchMarketplace(
+            platform,
+            text,
+            platform === 'shopee' ? 20 : 12
+          );
+        }
+
+        lastSearch = found
+          .filter((p) => Number(p.sales || 0) >= 101)
+          .sort(
+            (a, b) =>
+              Number(b.sales || 0) -
+              Number(a.sales || 0)
+          );
 
         if (!lastSearch.length) {
           return ctx.reply(
-            platform === 'shopee'
-              ? '⚠️ A busca não trouxe nenhum produto com pelo menos 101 vendas. Tente outro termo.'
-              : 'Não encontrei produtos.',
+            '⚠️ Não encontrei nessa busca nenhum produto que eu consiga confirmar com 101+ vendas.\n\n' +
+              'Tente outro termo. A Auri não vai completar ou inventar número de vendas.',
             mainMenu()
           );
         }
 
         const rows = lastSearch.map((p, i) => [
           Markup.button.callback(
-            `${String(p.name || 'Produto').slice(0, 40)}${
-              platform === 'shopee' && Number(p.sales || 0) > 0
-                ? ` • 🛒 ${Number(p.sales).toLocaleString('pt-BR')}`
-                : p.score
-                  ? ` • ${p.score}`
-                  : ''
-            }`,
+            `${String(p.name || 'Produto').slice(0, 36)} • 🛒 ${Number(
+              p.sales
+            ).toLocaleString('pt-BR')}`,
             `pick:${i}`
           )
         ]);
 
         return ctx.reply(
-          platform === 'shopee'
-            ? '🧡 Só mostrei produtos com 101+ vendas confirmadas pela Shopee. Escolha um:'
-            : platform === 'mercadolivre'
-              ? '🏆 Encontrei produtos entre os mais vendidos relacionados à sua busca. Escolha um:'
-              : 'Escolha um produto:',
+          `${marketplaceLabel(platform)}\n\n` +
+            `✅ ${lastSearch.length} produto(s) com 101+ vendas confirmadas.\n` +
+            'Escolha um para abrir na Caixa de aprovação:',
           Markup.inlineKeyboard(rows)
         );
       } catch (e) {
-        return ctx.reply(`⚠️ ${e.message}`, mainMenu());
+        return ctx.reply(
+          `⚠️ ${e.message}`,
+          mainMenu()
+        );
       }
     }
   });
@@ -2230,20 +2228,13 @@ export function startTelegram({ token, adminId }) {
 
   bot.action(/^sp:(.+)$/, async (ctx) => {
     const platform = ctx.match[1];
+
     await ctx.answerCbQuery();
 
-    if (platform === 'mercadolivre') {
-      drafts.set(ctx.from.id, {
-        step: 'meli_affiliate_product_url',
-        mode: 'search',
-        data: { platform: 'mercadolivre' }
-      });
-
+    if (!['shopee', 'shein', 'mercadolivre'].includes(platform)) {
       return ctx.reply(
-        '💛 Cole seu link de afiliada do Mercado Livre.\n\n' +
-          'Pode ser o link curto meli.la ou o link completo gerado pelo Mercado Livre.\n\n' +
-          'Eu vou identificar automaticamente o nome, o preço e a foto do produto — você não precisa escrever esses dados.',
-        Markup.keyboard([[BTN.cancel]]).resize()
+        '⚠️ Marketplace não disponível nessa busca.',
+        mainMenu()
       );
     }
 
@@ -2253,11 +2244,15 @@ export function startTelegram({ token, adminId }) {
       data: { platform }
     });
 
-    await ctx.reply(
-      'Digite o que quer procurar. Ex.: luminária, vestido, organizador, tablet…',
+    return ctx.reply(
+      `${marketplaceLabel(platform)}\n\n` +
+        'Digite o que quer procurar.\n' +
+        'Ex.: perfume, vestido, cafeteira, mochila, skincare, cadeira, chocolate…\n\n' +
+        '🔐 Só entram resultados com 101+ vendas confirmadas.',
       Markup.keyboard([[BTN.cancel]]).resize()
     );
   });
+
 
   bot.action(/^pick:(\d+)$/, async (ctx) => {
     const p = lastSearch[Number(ctx.match[1])];
@@ -2266,46 +2261,48 @@ export function startTelegram({ token, adminId }) {
       return ctx.answerCbQuery('Busca expirou.');
     }
 
-    await ctx.answerCbQuery('Preparando…');
+    await ctx.answerCbQuery(
+      'Abrindo Caixa de aprovação…'
+    );
 
-    // BUSCAR OFERTAS -> SHOPEE
-    // Agora usa EXATAMENTE a mesma Caixa de aprovação.
-    if (p.platform === 'shopee') {
-      const product = {
-        ...p
-      };
+    if (Number(p.sales || 0) < 101) {
+      return ctx.reply(
+        '⚠️ Esse produto foi bloqueado porque não tem 101+ vendas confirmadas.',
+        mainMenu()
+      );
+    }
 
-      if (Number(product.sales || 0) < 101) {
-        return ctx.reply(
-          '⚠️ Esse produto não passou pela regra de 101+ vendas e foi bloqueado.',
-          mainMenu()
-        );
-      }
+    const product = { ...p };
 
-      const publicLink = String(
-        product.productLink ||
-        product.canonicalUrl ||
-        ''
-      ).trim();
+    const publicLink = String(
+      product.productLink ||
+      product.publicLink ||
+      product.canonicalUrl ||
+      ''
+    ).trim();
 
+    if (!publicLink) {
+      return ctx.reply(
+        '⚠️ Não consegui confirmar a página pública desse produto. Ele não será usado.',
+        mainMenu()
+      );
+    }
+
+    product.publicLink = publicLink;
+    product.canonicalUrl =
+      product.canonicalUrl || publicLink;
+    product.salesVerified = true;
+    product.factsVerified = true;
+
+    if (product.platform === 'shopee') {
       const apiAffiliateLink = String(
-        product.affiliateLink ||
-        ''
+        product.affiliateLink || ''
       ).trim();
 
-      // Só chamamos de "automático confirmado" quando
-      // o offerLink vindo da Affiliate Open API é diferente
-      // do link público normal do produto.
       const affiliateVerified = Boolean(
         apiAffiliateLink &&
-        publicLink &&
         apiAffiliateLink !== publicLink
       );
-
-      product.publicLink = publicLink;
-      product.canonicalUrl =
-        product.canonicalUrl ||
-        publicLink;
 
       product.affiliateLink =
         affiliateVerified
@@ -2320,116 +2317,98 @@ export function startTelegram({ token, adminId }) {
           ? 'offerLink'
           : '';
 
-      product.salesVerified = true;
-      product.factsVerified = true;
       product.dataSource =
         'Shopee Affiliate Open API';
+    } else {
+      product.affiliateLink = null;
+      product.affiliateLinkVerified = false;
+      product.affiliateLinkSource = '';
+      product.dataSource =
+        product.platform === 'mercadolivre'
+          ? 'Mercado Livre API'
+          : 'Página oficial SHEIN';
+    }
 
+    if (
+      !Array.isArray(product.verifiedFacts) ||
+      !product.verifiedFacts.length
+    ) {
       product.verifiedFacts = [
         product.name
           ? `Nome do anúncio: ${product.name}`
           : null,
         Number(product.price || 0) > 0
-          ? `Preço atual confirmado: R$ ${Number(product.price).toFixed(2).replace('.', ',')}`
+          ? `Preço atual confirmado: R$ ${Number(product.price)
+              .toFixed(2)
+              .replace('.', ',')}`
           : null,
         Number(product.discountPct || 0) > 0
-          ? `Desconto confirmado: ${Math.round(Number(product.discountPct))}%`
+          ? `Desconto confirmado: ${Math.round(
+              Number(product.discountPct)
+            )}%`
           : null,
         Number(product.sales || 0) > 0
-          ? `Vendas confirmadas: ${Number(product.sales).toLocaleString('pt-BR')}`
+          ? `Vendas confirmadas: ${Number(
+              product.sales
+            ).toLocaleString('pt-BR')}`
           : null,
         Number(product.rating || 0) > 0
-          ? `Nota confirmada: ${Number(product.rating).toFixed(1).replace('.', ',')}`
+          ? `Nota confirmada: ${Number(product.rating)
+              .toFixed(1)
+              .replace('.', ',')}`
           : null,
         product.shopName
           ? `Loja confirmada: ${product.shopName}`
           : null
       ].filter(Boolean);
+    }
 
-      const copy =
-        await generateOfferCopy(
-          product,
-          'Use somente os fatos confirmados pela Shopee Affiliate Open API. Não invente nenhuma característica.'
-        );
+    const copy = await generateOfferCopy(
+      product,
+      'Use somente os fatos verificados do produto. Não invente características, benefícios, urgência, cupom, frete ou detalhes.'
+    );
 
-      const item = {
-        id:
-          crypto.randomBytes(4)
-            .toString('hex'),
-        text: copy.text,
+    const item = {
+      id: crypto.randomBytes(4).toString('hex'),
+      text: copy.text,
+      publicLink,
+      link:
+        product.affiliateLink ||
         publicLink,
-        link:
-          affiliateVerified
-            ? apiAffiliateLink
-            : publicLink,
-        photoPath: null,
-        product,
-        aiGenerated: true,
-        aiProvider: copy.provider,
-        source: 'search-shopee-api',
-        createdAt:
-          new Date().toISOString()
-      };
+      photoPath: null,
+      product,
+      aiGenerated: true,
+      aiProvider: copy.provider,
+      source: `search-${product.platform}`,
+      createdAt: new Date().toISOString()
+    };
 
-      // Coloca temporariamente na mesma Caixa de aprovação,
-      // para os mesmos botões/handlers funcionarem.
-      updateStore((s) => {
-        s.suggestions = [
-          item,
-          ...(s.suggestions || [])
-        ].slice(
-          0,
-          config.discoverySuggestionCap || 180
-        );
-        return s;
-      });
-
-      await ctx.reply(
-        '📥 Coloquei esse produto na mesma Caixa de aprovação. Agora você pode conferir ou substituir o link antes de salvar.'
+    updateStore((s) => {
+      s.suggestions = [
+        item,
+        ...(s.suggestions || [])
+      ].slice(
+        0,
+        config.discoverySuggestionCap || 180
       );
+      return s;
+    });
 
-      return renderApprovalCard(
-        ctx,
-        item
-      );
-    }
+    await ctx.reply(
+      '📥 Produto colocado na Caixa de aprovação.\n\n' +
+        (
+          product.platform === 'shopee'
+            ? 'Você pode conferir o link automático da Shopee ou substituí-lo pelo seu.'
+            : 'Agora coloque o SEU link de afiliada antes de salvar na fila.'
+        )
+    );
 
-    if (p.platform === 'mercadolivre') {
-      drafts.set(ctx.from.id, {
-        step: 'meli_affiliate_link',
-        mode: 'search',
-        data: {
-          product: { ...p },
-          id: crypto.randomBytes(3).toString('hex')
-        }
-      });
-
-      const rows = [];
-
-      if (p.canonicalUrl) {
-        rows.push([
-          Markup.button.url(
-            '🛍️ Abrir produto no Mercado Livre',
-            p.canonicalUrl
-          )
-        ]);
-      }
-
-      return ctx.reply(
-        `💛 ${p.name}\n\n` +
-          `Preço encontrado: R$ ${Number(p.price || 0).toFixed(2).replace('.', ',')}\n` +
-          `${p.highlightPosition ? `🏆 Posição entre os mais vendidos: #${p.highlightPosition}\n` : ''}` +
-          `${p.categoryName ? `Categoria: ${p.categoryName}\n` : ''}\n` +
-          'Agora gere o SEU link de afiliada desse produto no Mercado Livre e cole aqui.\n\n' +
-          'Assim a Auri usa a foto, o nome e o preço encontrados pela API, mas envia o link que realmente contabiliza sua comissão.',
-        rows.length
-          ? Markup.inlineKeyboard(rows)
-          : Markup.keyboard([[BTN.cancel]]).resize()
-      );
-    }
-
-    return finalizeFromProduct(ctx, p);
+    return renderApprovalCard(
+      ctx,
+      item
+    );
   });
+
 
   bot.action(/^gt:(\d+):(\d+)$/, async (ctx) => {
     const idx = Number(ctx.match[1]);

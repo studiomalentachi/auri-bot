@@ -839,6 +839,75 @@ async function discoverShein(
   return out;
 }
 
+
+export async function searchSheinOffers(keyword, limit = 8) {
+  const term = String(keyword || '').trim();
+
+  if (!term) {
+    throw new Error('Digite o nome do produto que quer procurar.');
+  }
+
+  if (!process.env.TAVILY_API_KEY) {
+    throw new Error('TAVILY_API_KEY não configurada.');
+  }
+
+  const results = await tavily(
+    `${term} SHEIN Brasil mais vendidos produto`,
+    ['br.shein.com', 'shein.com'],
+    Math.max(12, Math.min(30, Number(limit || 8) * 3))
+  );
+
+  const out = [];
+  const seen = new Set();
+
+  for (const r of results) {
+    const url = String(r?.url || '').trim();
+
+    if (!directUrl('shein', url)) {
+      continue;
+    }
+
+    const product = await fetchSheinVerified(url);
+
+    if (!product) {
+      continue;
+    }
+
+    if (Number(product.sales || 0) < MIN_SALES()) {
+      continue;
+    }
+
+    const key = String(
+      product.canonicalUrl ||
+      product.publicLink ||
+      url
+    )
+      .toLowerCase()
+      .replace(/[?#].*$/, '');
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+
+    product.affiliateLink = null;
+    product.salesVerified = true;
+    product.factsVerified = true;
+    product.dataSource = 'Página oficial SHEIN';
+    product.verifiedFacts = verifiedFacts(product);
+    product.verifiedScore = scoreProduct(product);
+
+    out.push(product);
+
+    if (out.length >= Math.max(1, Number(limit || 8))) {
+      break;
+    }
+  }
+
+  return out;
+}
+
 function existingKeys() {
   const s =
     readStore();
