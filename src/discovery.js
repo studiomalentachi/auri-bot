@@ -4,7 +4,7 @@ import { generateOfferCopy } from './ai.js';
 import {
   generateShopeeShortLink,
   isShopeeConfigured,
-  searchShopeeOffers
+  searchShopeeOffersBroad
 } from './shopee.js';
 import { importProductFromUrl } from './marketplaces.js';
 import {
@@ -153,10 +153,14 @@ async function discoverShopee(categories) {
   for (const keyword of categories) {
     try {
       const found =
-        await searchShopeeOffers(
+        await searchShopeeOffersBroad(
           keyword,
           {
-            limit: 20,
+            minSales:
+              MIN_SALES(),
+            desired: 20,
+            pages: 2,
+            limitPerPage: 20,
             sortType: 5
           }
         );

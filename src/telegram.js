@@ -6,7 +6,7 @@ import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
 import { discoverWebOffers, searchSheinOffers } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
-import { getShopeeConversions, isShopeeConfigured } from './shopee.js';
+import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
@@ -1935,12 +1935,30 @@ export function startTelegram({ token, adminId }) {
         let found = [];
 
         if (platform === 'shein') {
-          found = await searchSheinOffers(text, 8);
+          found = await searchSheinOffers(
+            text,
+            8
+          );
+        } else if (platform === 'shopee') {
+          found = await searchShopeeOffersBroad(
+            text,
+            {
+              minSales:
+                Number(
+                  config.discoveryMinSales ||
+                  50
+                ),
+              desired: 8,
+              pages: 3,
+              limitPerPage: 20,
+              sortType: 5
+            }
+          );
         } else {
           found = await searchMarketplace(
             platform,
             text,
-            platform === 'shopee' ? 20 : 12
+            12
           );
         }
 
@@ -1954,8 +1972,12 @@ export function startTelegram({ token, adminId }) {
 
         if (!lastSearch.length) {
           return ctx.reply(
-            '⚠️ Não encontrei nessa busca nenhum produto que eu consiga confirmar com 50+ vendas.\n\n' +
-              'Tente outro termo. A Auri não vai completar ou inventar número de vendas.',
+            '⚠️ Não encontrei nenhum resultado com 50+ vendas confirmadas.\n\n' +
+              (
+                platform === 'shopee'
+                  ? 'Eu já tentei automaticamente versões mais amplas do termo e várias páginas da Shopee. Tente uma palavra ainda mais simples, como “cadeira”.'
+                  : 'Tente outro termo. A Auri não vai completar ou inventar número de vendas.'
+              ),
             mainMenu()
           );
         }

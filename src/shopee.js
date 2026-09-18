@@ -49,6 +49,173 @@ export async function searchShopeeOffers(keyword, { page = 1, limit = 10, sortTy
   return (data.productOfferV2?.nodes || []).map(normalizeShopeeProduct);
 }
 
+
+function shopeeKeywordVariants(keyword) {
+  const raw = String(keyword || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  if (!raw) return [];
+
+  const stop = new Set([
+    'a','o','as','os',
+    'de','da','do','das','dos',
+    'e','em','no','na','nos','nas',
+    'para','pra','por','com',
+    'um','uma'
+  ]);
+
+  const words = raw
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const useful = words.filter(
+    (w) => !stop.has(
+      w.toLowerCase()
+    )
+  );
+
+  const variants = [
+    raw
+  ];
+
+  if (useful.length >= 2) {
+    variants.push(
+      useful.join(' ')
+    );
+
+    variants.push(
+      useful
+        .slice(0, 2)
+        .join(' ')
+    );
+  }
+
+  if (useful.length >= 3) {
+    variants.push(
+      `${useful[0]} ${useful.at(-1)}`
+    );
+  }
+
+  if (useful.length >= 1) {
+    variants.push(
+      useful[0]
+    );
+  }
+
+  return [
+    ...new Set(
+      variants
+        .map((x) => x.trim())
+        .filter(Boolean)
+    )
+  ].slice(0, 5);
+}
+
+export async function searchShopeeOffersBroad(
+  keyword,
+  {
+    minSales = 50,
+    desired = 8,
+    pages = 3,
+    limitPerPage = 20,
+    sortType = 5
+  } = {}
+) {
+  const variants =
+    shopeeKeywordVariants(keyword);
+
+  if (!variants.length) {
+    return [];
+  }
+
+  const found = [];
+  const seen = new Set();
+
+  for (const term of variants) {
+    for (
+      let page = 1;
+      page <= Math.max(1, pages);
+      page += 1
+    ) {
+      let rows = [];
+
+      try {
+        rows = await searchShopeeOffers(
+          term,
+          {
+            page,
+            limit: limitPerPage,
+            sortType
+          }
+        );
+      } catch {
+        rows = [];
+      }
+
+      for (const product of rows) {
+        const key =
+          `${product.shopId || ''}:${product.itemId || ''}`;
+
+        if (
+          !product.itemId ||
+          !product.shopId ||
+          !product.name ||
+          !product.productLink ||
+          Number(product.price || 0) <= 0 ||
+          seen.has(key)
+        ) {
+          continue;
+        }
+
+        seen.add(key);
+
+        if (
+          Number(product.sales || 0) <
+          Math.max(0, Number(minSales || 0))
+        ) {
+          continue;
+        }
+
+        found.push(product);
+      }
+
+      if (
+        found.length >=
+        Math.max(1, Number(desired || 8))
+      ) {
+        return found
+          .sort(
+            (a, b) =>
+              Number(b.sales || 0) -
+              Number(a.sales || 0)
+          )
+          .slice(
+            0,
+            Math.max(
+              1,
+              Number(desired || 8)
+            )
+          );
+      }
+    }
+  }
+
+  return found
+    .sort(
+      (a, b) =>
+        Number(b.sales || 0) -
+        Number(a.sales || 0)
+    )
+    .slice(
+      0,
+      Math.max(
+        1,
+        Number(desired || 8)
+      )
+    );
+}
+
 export async function getShopeeProduct({ itemId, shopId }) {
   const list = await searchShopeeOffers('', { itemId: Number(itemId), shopId: Number(shopId), limit: 10, sortType: 1 });
   return list.find(x => String(x.itemId) === String(itemId)) || list[0] || null;
