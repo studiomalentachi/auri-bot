@@ -20,6 +20,7 @@ const defaults = {
   autoQueueDiscovery: false,
   aiProvider: 'auto',
   safeCouponsOnly: true,
+  lastTrendsSentDate: null,
   enabledMarketplaces: [
     'shopee',
     'shein',

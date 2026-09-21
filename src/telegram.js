@@ -10,6 +10,7 @@ import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad } fro
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
+import { buildTrendDigest } from './trends.js';
 import { buildMeliAuthorizationUrl, exchangeMeliAuthorizationCode, meliOAuthStatus } from './mercadolivre.js';
 
 const drafts = new Map();
@@ -31,6 +32,7 @@ const BTN = {
   filters: '🎛️ Filtros',
   suggestions: '📥 Caixa de aprovação',
   results: '📈 Resultados',
+  trends: '🔥 Tendências',
   pause: '⏸️ Pausar envios',
   resume: '▶️ Retomar envios',
   cancel: '❌ Cancelar'
@@ -45,7 +47,8 @@ function mainMenu() {
     [BTN.whatsapp, BTN.status],
     [BTN.marketplaces, BTN.filters],
     [BTN.ai, BTN.discovery],
-    [BTN.results, BTN.sendNow],
+    [BTN.trends, BTN.results],
+    [BTN.sendNow],
     [s.paused ? BTN.resume : BTN.pause]
   ]).resize();
 }
@@ -753,6 +756,27 @@ function onlyAdmin(adminId) {
   };
 }
 
+async function showTrends(ctx) {
+  await ctx.reply(
+    '⏳ Pesquisando as tendências de hoje na Shopee, SHEIN e Mercado Livre…'
+  );
+
+  try {
+    const digest =
+      await buildTrendDigest();
+
+    return ctx.reply(
+      digest.text,
+      mainMenu()
+    );
+  } catch (e) {
+    return ctx.reply(
+      `⚠️ Não consegui montar as tendências agora: ${e.message}`,
+      mainMenu()
+    );
+  }
+}
+
 function statusText() {
   const s = readStore();
   const ai = availableAIProviders();
@@ -776,6 +800,7 @@ function statusText() {
     `IA automática: ${process.env.GEMINI_API_KEY ? 'Gemini' : 'fallback configurado'}\n` +
     `Shopee Open API: ${isShopeeConfigured() ? '✅' : '⚠️ não configurada'}\n` +
     `Mercado Livre API: ${meliOAuthStatus().authorized ? '✅ conectada' : (meliOAuthStatus().configured ? '⚠️ falta autorizar (/meli)' : '⚠️ não configurada')}\n` +
+    `Tendências: ${config.trendsEnabled ? `✅ diariamente às ${String(config.trendsHour).padStart(2, '0')}:${String(config.trendsMinute).padStart(2, '0')}` : '❌ automáticas desligadas'}\n` +
     `Auto busca: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'} | ` +
     `Auto fila: ${s.autoQueueDiscovery ? '✅' : '❌'}\n` +
     `Enviadas: ${s.metrics.sentOffers} ofertas / ${s.metrics.sentMessages} mensagens`
@@ -1872,6 +1897,10 @@ export function startTelegram({ token, adminId }) {
 
   bot.command('meli', (ctx) => beginMeliAuthorization(ctx));
 
+  bot.command('tendencias', (ctx) =>
+    showTrends(ctx)
+  );
+
   bot.on('photo', async (ctx) => {
     const d = drafts.get(ctx.from.id);
     if (!d) return;
@@ -2046,6 +2075,7 @@ export function startTelegram({ token, adminId }) {
 
       if (text === BTN.ai) return showAI(ctx);
       if (text === BTN.discovery) return showDiscovery(ctx);
+      if (text === BTN.trends) return showTrends(ctx);
       if (text === BTN.results) return showResults(ctx);
 
       if (text === BTN.sendNow) {

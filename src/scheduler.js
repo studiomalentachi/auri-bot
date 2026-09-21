@@ -12,46 +12,76 @@ import {
   updateStore
 } from './store.js';
 import { sendOfferToGroups } from './whatsapp.js';
+import { buildTrendDigest } from './trends.js';
 
 let busy = false;
 let lastSlot = '';
 let lastDiscoverySlot = '';
+let lastTrendSlot = '';
 
 function nowParts() {
-  const parts = new Intl.DateTimeFormat(
-    'en-CA',
-    {
-      timeZone: config.timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }
-  )
-    .formatToParts(new Date())
-    .reduce(
-      (a, p) => (
-        a[p.type] = p.value,
-        a
-      ),
-      {}
-    );
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone:
+          config.timezone,
+        year:
+          'numeric',
+        month:
+          '2-digit',
+        day:
+          '2-digit',
+        hour:
+          '2-digit',
+        minute:
+          '2-digit',
+        hour12:
+          false
+      }
+    )
+      .formatToParts(
+        new Date()
+      )
+      .reduce(
+        (a, p) => (
+          a[p.type] =
+            p.value,
+          a
+        ),
+        {}
+      );
 
   return {
     date:
       `${parts.year}-${parts.month}-${parts.day}`,
-    hour: Number(parts.hour),
-    minute: Number(parts.minute)
+    hour:
+      Number(
+        parts.hour
+      ),
+    minute:
+      Number(
+        parts.minute
+      )
   };
 }
 
 function eligibleTime() {
-  const { hour, minute } = nowParts();
-  const maxHour = config.include22 ? 22 : 21;
+  const {
+    hour,
+    minute
+  } =
+    nowParts();
 
-  if (hour < 8 || hour > maxHour) {
+  const maxHour =
+    config.include22
+      ? 22
+      : 21;
+
+  if (
+    hour < 8 ||
+    hour > maxHour
+  ) {
     return false;
   }
 
@@ -64,31 +94,58 @@ function eligibleTime() {
   }
 
   return (
-    minute % config.sendIntervalMinutes === 0
+    minute %
+    config.sendIntervalMinutes ===
+    0
   );
 }
 
 function discoverySlot() {
-  const p = nowParts();
+  const p =
+    nowParts();
 
-  // Pesquisa apenas no período útil.
-  if (p.hour < 8 || p.hour > 22) {
+  if (
+    p.hour < 8 ||
+    p.hour > 22
+  ) {
     return null;
   }
 
   const minutes =
-    p.hour * 60 + p.minute;
+    p.hour * 60 +
+    p.minute;
 
-  const index = Math.floor(
-    minutes /
-    config.discoveryEveryMinutes
-  );
+  const index =
+    Math.floor(
+      minutes /
+      config.discoveryEveryMinutes
+    );
 
   return `${p.date}-${index}`;
 }
 
-function removeUnverifiedCouponClaims(item) {
-  const s = readStore();
+function trendSlot() {
+  const p =
+    nowParts();
+
+  if (
+    !config.trendsEnabled ||
+    p.hour !==
+      config.trendsHour ||
+    p.minute !==
+      config.trendsMinute
+  ) {
+    return null;
+  }
+
+  return p.date;
+}
+
+function removeUnverifiedCouponClaims(
+  item
+) {
+  const s =
+    readStore();
 
   if (
     !s.safeCouponsOnly ||
@@ -98,24 +155,42 @@ function removeUnverifiedCouponClaims(item) {
     return item;
   }
 
-  const original = String(item.text || '');
-  const lines = original.split('\n');
+  const original =
+    String(
+      item.text || ''
+    );
 
-  const safe = lines.filter(
-    (line) =>
-      !/\b(cupom|voucher|c[oó]digo promocional|use o c[oó]digo)\b/i.test(
-        line
-      )
-  );
+  const lines =
+    original.split(
+      '\n'
+    );
 
-  if (safe.length !== lines.length) {
-    item.text = safe
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+  const safe =
+    lines.filter(
+      (line) =>
+        !/\b(cupom|voucher|c[oó]digo promocional|use o c[oó]digo)\b/i.test(
+          line
+        )
+    );
+
+  if (
+    safe.length !==
+    lines.length
+  ) {
+    item.text =
+      safe
+        .join('\n')
+        .replace(
+          /\n{3,}/g,
+          '\n\n'
+        )
+        .trim();
 
     updateStore((x) => {
-      x.metrics.blockedCoupons += 1;
+      x.metrics
+        .blockedCoupons +=
+        1;
+
       return x;
     });
   }
@@ -123,11 +198,17 @@ function removeUnverifiedCouponClaims(item) {
   return item;
 }
 
-async function refreshBeforeSend(item) {
-  item = removeUnverifiedCouponClaims(item);
+async function refreshBeforeSend(
+  item
+) {
+  item =
+    removeUnverifiedCouponClaims(
+      item
+    );
 
   if (
-    item.product?.platform !== 'shopee' ||
+    item.product?.platform !==
+      'shopee' ||
     !isShopeeConfigured() ||
     !item.product.itemId ||
     !item.product.shopId
@@ -136,10 +217,15 @@ async function refreshBeforeSend(item) {
   }
 
   try {
-    const fresh = await getShopeeProduct({
-      itemId: item.product.itemId,
-      shopId: item.product.shopId
-    });
+    const fresh =
+      await getShopeeProduct({
+        itemId:
+          item.product
+            .itemId,
+        shopId:
+          item.product
+            .shopId
+      });
 
     if (!fresh) {
       throw new Error(
@@ -150,23 +236,35 @@ async function refreshBeforeSend(item) {
     fresh.affiliateLink =
       await generateShopeeShortLink(
         fresh.productLink,
-        ['whatsapp', 'auri']
+        [
+          'whatsapp',
+          'auri'
+        ]
       );
 
-    const oldPrice = Number(
-      item.product.price || 0
-    );
+    const oldPrice =
+      Number(
+        item.product.price ||
+        0
+      );
 
-    const newPrice = Number(
-      fresh.price || 0
-    );
+    const newPrice =
+      Number(
+        fresh.price ||
+        0
+      );
 
     const changed =
       oldPrice > 0 &&
       newPrice > 0 &&
-      Math.abs(newPrice - oldPrice) >= 0.01;
+      Math.abs(
+        newPrice -
+        oldPrice
+      ) >= 0.01;
 
-    item.product = fresh;
+    item.product =
+      fresh;
+
     item.link =
       fresh.affiliateLink ||
       item.link;
@@ -181,11 +279,15 @@ async function refreshBeforeSend(item) {
           'O preço foi atualizado antes do envio.'
         );
 
-      item.text = copy.text;
-      item.aiProvider = copy.provider;
+      item.text =
+        copy.text;
+
+      item.aiProvider =
+        copy.provider;
     }
   } catch (e) {
-    item.refreshWarning = e.message;
+    item.refreshWarning =
+      e.message;
   }
 
   return item;
@@ -201,7 +303,8 @@ export async function sendOneNow() {
   busy = true;
 
   try {
-    const s = readStore();
+    const s =
+      readStore();
 
     if (!s.queue.length) {
       throw new Error(
@@ -216,7 +319,8 @@ export async function sendOneNow() {
             s.targetGroupJid
               ? [
                   {
-                    jid: s.targetGroupJid,
+                    jid:
+                      s.targetGroupJid,
                     name:
                       s.targetGroupName ||
                       'Grupo'
@@ -244,7 +348,11 @@ export async function sendOneNow() {
 
     updateStore((x) => {
       x.queue.shift();
-      x.metrics.sentMessages += sentCount;
+
+      x.metrics
+        .sentMessages +=
+        sentCount;
+
       return x;
     });
 
@@ -259,11 +367,73 @@ export async function sendOneNow() {
   }
 }
 
-async function tick() {
-  const p = nowParts();
+async function maybeSendDailyTrends(
+  telegram,
+  adminId
+) {
+  const slot =
+    trendSlot();
+
+  if (
+    !slot ||
+    slot ===
+      lastTrendSlot
+  ) {
+    return;
+  }
+
+  const store =
+    readStore();
+
+  if (
+    store
+      .lastTrendsSentDate ===
+    slot
+  ) {
+    lastTrendSlot =
+      slot;
+
+    return;
+  }
+
+  lastTrendSlot =
+    slot;
+
+  try {
+    const digest =
+      await buildTrendDigest();
+
+    await telegram.sendMessage(
+      adminId,
+      digest.text
+    );
+
+    updateStore((s) => {
+      s.lastTrendsSentDate =
+        slot;
+
+      return s;
+    });
+  } catch (e) {
+    console.error(
+      'Tendências diárias:',
+      e.message
+    );
+  }
+}
+
+async function tick({
+  telegram,
+  adminId
+} = {}) {
+  const p =
+    nowParts();
+
   const slot =
     `${p.date}-${p.hour}:${p.minute}`;
-  const s = readStore();
+
+  const s =
+    readStore();
 
   if (
     !s.paused &&
@@ -271,7 +441,8 @@ async function tick() {
     slot !== lastSlot &&
     s.queue.length
   ) {
-    lastSlot = slot;
+    lastSlot =
+      slot;
 
     try {
       await sendOneNow();
@@ -283,33 +454,62 @@ async function tick() {
     }
   }
 
-  const ds = discoverySlot();
+  const ds =
+    discoverySlot();
 
   if (
     s.autoDiscovery &&
     ds &&
-    ds !== lastDiscoverySlot
+    ds !==
+      lastDiscoverySlot
   ) {
-    lastDiscoverySlot = ds;
+    lastDiscoverySlot =
+      ds;
 
-    discoverWebOffers().catch(
-      (e) =>
-        console.error(
-          'Busca automática:',
-          e.message
-        )
+    discoverWebOffers()
+      .catch(
+        (e) =>
+          console.error(
+            'Busca automática:',
+            e.message
+          )
+      );
+  }
+
+  if (
+    telegram &&
+    adminId
+  ) {
+    await maybeSendDailyTrends(
+      telegram,
+      adminId
     );
   }
 }
 
-export function startScheduler() {
+export function startScheduler({
+  telegram,
+  adminId
+} = {}) {
   setInterval(
-    () => tick().catch(console.error),
+    () =>
+      tick({
+        telegram,
+        adminId
+      }).catch(
+        console.error
+      ),
     15000
   );
 
   setTimeout(
-    () => tick().catch(console.error),
+    () =>
+      tick({
+        telegram,
+        adminId
+      }).catch(
+        console.error
+      ),
     3000
   );
 
@@ -320,4 +520,12 @@ export function startScheduler() {
   console.log(
     `🔎 Pesquisa web: até ${config.discoveryMaxPerRun} produtos por rodada, a cada ${config.discoveryEveryMinutes} min.`
   );
+
+  if (
+    config.trendsEnabled
+  ) {
+    console.log(
+      `📈 Tendências Telegram: diariamente às ${String(config.trendsHour).padStart(2, '0')}:${String(config.trendsMinute).padStart(2, '0')}.`
+    );
+  }
 }

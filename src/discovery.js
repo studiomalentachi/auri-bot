@@ -8,6 +8,9 @@ import {
 } from './shopee.js';
 import { importProductFromUrl } from './marketplaces.js';
 import {
+  getBrazilSeasonalContext
+} from './seasonality.js';
+import {
   isDuplicate,
   productKey,
   readStore,
@@ -47,6 +50,20 @@ function nextCategories() {
           'eletrodomésticos para casa'
         ];
 
+  const seasonal =
+    getBrazilSeasonalContext(
+      config.timezone
+    );
+
+  const seasonalKeywords =
+    seasonal.keywords
+      .filter(
+        (x) =>
+          !/\b(beb[eê]|bebes|bebês|maternidade|gestante|fralda|mamadeira|chupeta|berço|berco)\b/i.test(
+            x
+          )
+      );
+
   let generalIdx =
     Number(
       s.discoveryKeywordIndex ||
@@ -83,6 +100,27 @@ function nextCategories() {
     );
 
   const picked = [];
+
+  // Antes de preencher casa + geral, reserva até 2 vagas para
+  // a estação/época atual (quando houver termos sazonais).
+  for (
+    const keyword of
+    seasonalKeywords.slice(
+      0,
+      2
+    )
+  ) {
+    if (
+      keyword &&
+      !picked.includes(
+        keyword
+      )
+    ) {
+      picked.push(
+        keyword
+      );
+    }
+  }
 
   for (
     let i = 0;
