@@ -1879,17 +1879,24 @@ export function startTelegram({ token, adminId }) {
   const bot = new Telegraf(token);
   bot.use(onlyAdmin(adminId));
 
-  bot.start((ctx) =>
-    ctx.reply(
+  bot.start((ctx) => {
+    drafts.delete(ctx.from.id);
+
+    return ctx.reply(
       'Oi! Eu sou a Auri 💜\n\n' +
         'Agora eu posso cadastrar ofertas manualmente, montar por link com IA, buscar produtos, trabalhar com vários grupos e fazer busca automática.',
       mainMenu()
-    )
-  );
+    );
+  });
 
-  bot.command('menu', (ctx) =>
-    ctx.reply('💜 Painel da Auri', mainMenu())
-  );
+  bot.command('menu', (ctx) => {
+    drafts.delete(ctx.from.id);
+
+    return ctx.reply(
+      '💜 Painel da Auri',
+      mainMenu()
+    );
+  });
 
   bot.command('status', (ctx) =>
     ctx.reply(statusText(), mainMenu())
@@ -2038,7 +2045,35 @@ export function startTelegram({ token, adminId }) {
 
     if (text.startsWith('/')) return next();
 
-    const d = drafts.get(ctx.from.id);
+    let d = drafts.get(ctx.from.id);
+
+    const mainButtons = new Set([
+      BTN.newOffer,
+      BTN.linkOffer,
+      BTN.search,
+      BTN.suggestions,
+      BTN.queue,
+      BTN.groups,
+      BTN.whatsapp,
+      BTN.status,
+      BTN.marketplaces,
+      BTN.filters,
+      BTN.ai,
+      BTN.discovery,
+      BTN.trends,
+      BTN.results,
+      BTN.sendNow,
+      BTN.pause,
+      BTN.resume
+    ]);
+
+    if (
+      d &&
+      mainButtons.has(text)
+    ) {
+      drafts.delete(ctx.from.id);
+      d = null;
+    }
 
     if (!d) {
       if (text === BTN.newOffer) return beginManual(ctx);
