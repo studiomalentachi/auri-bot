@@ -1,5 +1,5 @@
 import { config } from './config.js';
-import { readStore } from './store.js';
+import { readStore, updateStore } from './store.js';
 import {
   searchShopeeOffersBroad
 } from './shopee.js';
@@ -531,6 +531,41 @@ export async function buildTrendDigest() {
 
   const date =
     localDateParts();
+
+  // A Auto busca usa estes termos confirmados como fonte do dia.
+  const confirmedTrendTerms = [
+    ...new Set(
+      [
+        ...shopee,
+        ...mercadolivre,
+        ...shein
+      ]
+        .map(
+          (x) =>
+            String(
+              x?.term || ''
+            ).trim()
+        )
+        .filter(
+          (x) =>
+            x &&
+            !BANNED.test(x)
+        )
+    )
+  ];
+
+  updateStore((s) => {
+    s.dailyTrendTerms = {
+      date:
+        date.iso,
+      terms:
+        confirmedTrendTerms,
+      updatedAt:
+        new Date().toISOString()
+    };
+
+    return s;
+  });
 
   const seasonalLabels =
     seasonal.labels

@@ -31,6 +31,345 @@ const MIN_SALES = () => {
   );
 };
 
+const BANNED_DISCOVERY =
+  /\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|amamenta(?:ção|cao)|fralda|mamadeira|chupeta|berço|berco|carrinho de bebê|carrinho de bebe|kit maternidade)\b/i;
+
+const TITLE_STOP_WORDS =
+  new Set([
+    'de','da','do','das','dos',
+    'para','pra','com','sem',
+    'e','em','no','na','nos','nas',
+    'o','a','os','as','um','uma',
+    'kit','novo','nova',
+    'original','oficial'
+  ]);
+
+function localIsoDate() {
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone:
+          config.timezone,
+        year:
+          'numeric',
+        month:
+          '2-digit',
+        day:
+          '2-digit'
+      }
+    )
+      .formatToParts(
+        new Date()
+      )
+      .reduce(
+        (acc, part) => {
+          acc[part.type] =
+            part.value;
+          return acc;
+        },
+        {}
+      );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(
+      /[\u0300-\u036f]/g,
+      ''
+    )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9\s]/g,
+      ' '
+    )
+    .replace(
+      /\s+/g,
+      ' '
+    )
+    .trim();
+}
+
+function titleKey(value) {
+  const tokens =
+    normalizeText(value)
+      .split(' ')
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          !TITLE_STOP_WORDS.has(
+            token
+          )
+      )
+      .slice(0, 9);
+
+  return tokens.join(' ');
+}
+
+function tokenSet(value) {
+  return new Set(
+    titleKey(value)
+      .split(' ')
+      .filter(Boolean)
+  );
+}
+
+function titleSimilarity(
+  a,
+  b
+) {
+  const A =
+    tokenSet(a);
+
+  const B =
+    tokenSet(b);
+
+  if (
+    !A.size ||
+    !B.size
+  ) {
+    return 0;
+  }
+
+  let common = 0;
+
+  for (
+    const token of A
+  ) {
+    if (
+      B.has(token)
+    ) {
+      common += 1;
+    }
+  }
+
+  return common /
+    Math.max(
+      A.size,
+      B.size
+    );
+}
+
+function isMaternityBlocked(
+  productOrText
+) {
+  const text =
+    typeof productOrText ===
+      'string'
+      ? productOrText
+      : [
+          productOrText?.name,
+          productOrText?.shopName,
+          productOrText?.categoryName
+        ]
+          .filter(Boolean)
+          .join(' ');
+
+  return BANNED_DISCOVERY.test(
+    String(text || '')
+  );
+}
+
+function seenProductMemory() {
+  const s =
+    readStore();
+
+  const cutoff =
+    Date.now() -
+    Math.max(
+      30,
+      Number(
+        config.discoveryRepeatBlockDays ||
+        120
+      )
+    ) *
+      86400000;
+
+  return (
+    s.discoverySeenProducts ||
+    []
+  ).filter(
+    (x) =>
+      !x.seenAt ||
+      new Date(
+        x.seenAt
+      ).getTime() >=
+        cutoff
+  );
+}
+
+function alreadySeenDiscovery(
+  product,
+  link = ''
+) {
+  const key =
+    productKey(
+      product,
+      link
+    );
+
+  const tKey =
+    titleKey(
+      product?.name
+    );
+
+  const memory =
+    seenProductMemory();
+
+  for (
+    const item of
+    memory
+  ) {
+    if (
+      key &&
+      item.key === key
+    ) {
+      return true;
+    }
+
+    if (
+      tKey &&
+      item.titleKey ===
+        tKey
+    ) {
+      return true;
+    }
+
+    // Bloqueia anúncios muito parecidos do mesmo produto,
+    // mesmo quando mudam de vendedor ou marketplace.
+    if (
+      product?.name &&
+      item.title &&
+      titleSimilarity(
+        product.name,
+        item.title
+      ) >= 0.82
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function rememberDiscoveryProducts(
+  products
+) {
+  if (!products?.length) {
+    return;
+  }
+
+  updateStore((s) => {
+    const current =
+      Array.isArray(
+        s.discoverySeenProducts
+      )
+        ? s.discoverySeenProducts
+        : [];
+
+    const additions =
+      products.map(
+        (product) => ({
+          key:
+            productKey(
+              product,
+              product.affiliateLink ||
+              product.publicLink ||
+              product.canonicalUrl
+            ),
+          title:
+            String(
+              product.name || ''
+            ).trim(),
+          titleKey:
+            titleKey(
+              product.name
+            ),
+          platform:
+            product.platform ||
+            null,
+          seenAt:
+            new Date()
+              .toISOString()
+        })
+      );
+
+    const merged = [
+      ...additions,
+      ...current
+    ];
+
+    const unique = [];
+    const seen =
+      new Set();
+
+    for (
+      const item of merged
+    ) {
+      const k =
+        `${
+          item.key || ''
+        }::${
+          item.titleKey || ''
+        }`;
+
+      if (
+        seen.has(k)
+      ) {
+        continue;
+      }
+
+      seen.add(k);
+      unique.push(item);
+
+      if (
+        unique.length >=
+        5000
+      ) {
+        break;
+      }
+    }
+
+    s.discoverySeenProducts =
+      unique;
+
+    return s;
+  });
+}
+
+function todayTrendTerms() {
+  const s =
+    readStore();
+
+  if (
+    s.dailyTrendTerms?.date !==
+      localIsoDate() ||
+    !Array.isArray(
+      s.dailyTrendTerms?.terms
+    )
+  ) {
+    return [];
+  }
+
+  return s.dailyTrendTerms.terms
+    .map(
+      (x) =>
+        String(
+          x || ''
+        ).trim()
+    )
+    .filter(
+      (x) =>
+        x &&
+        !BANNED_DISCOVERY.test(
+          x
+        )
+    );
+}
+
 function nextCategories() {
   const s = readStore();
 
@@ -101,8 +440,28 @@ function nextCategories() {
 
   const picked = [];
 
-  // Antes de preencher casa + geral, reserva até 2 vagas para
-  // a estação/época atual (quando houver termos sazonais).
+  // PRIORIDADE 1: tendências reais que a Auri confirmou hoje.
+  // Elas entram primeiro na Auto busca, sem maternidade/bebê.
+  for (
+    const keyword of
+    todayTrendTerms().slice(
+      0,
+      4
+    )
+  ) {
+    if (
+      keyword &&
+      !picked.includes(
+        keyword
+      )
+    ) {
+      picked.push(
+        keyword
+      );
+    }
+  }
+
+  // PRIORIDADE 2: época/estação atual.
   for (
     const keyword of
     seasonalKeywords.slice(
@@ -150,6 +509,9 @@ function nextCategories() {
     generalIdx += 1;
 
     if (
+      !isMaternityBlocked(
+        keyword
+      ) &&
       !picked.includes(
         keyword
       )
@@ -318,6 +680,14 @@ async function discoverShopee(categories) {
 
         // Pelo menos 50 vendas = 50 ou mais.
         if (sales < MIN_SALES()) {
+          continue;
+        }
+
+        if (
+          isMaternityBlocked(
+            row
+          )
+        ) {
           continue;
         }
 
@@ -877,7 +1247,10 @@ async function fetchSheinVerified(
     if (
       !name ||
       price <= 0 ||
-      sales < MIN_SALES()
+      sales < MIN_SALES() ||
+      isMaternityBlocked(
+        name
+      )
     ) {
       return null;
     }
@@ -1184,6 +1557,9 @@ export async function discoverWebOffers({
           (p) =>
             p.platform ===
               platform &&
+            !isMaternityBlocked(
+              p
+            ) &&
             Number(
               p.sales || 0
             ) >=
@@ -1290,6 +1666,12 @@ export async function discoverWebOffers({
             p.affiliateLink ||
             p.publicLink ||
             p.canonicalUrl
+          ) ||
+          alreadySeenDiscovery(
+            p,
+            p.affiliateLink ||
+            p.publicLink ||
+            p.canonicalUrl
           )
         ) {
           continue;
@@ -1318,6 +1700,12 @@ export async function discoverWebOffers({
 
     return x;
   });
+
+  // Assim que aparece numa rodada, fica registrado na memória
+  // anti-repetição. Mesmo se você ignorar, ele não volta logo depois.
+  rememberDiscoveryProducts(
+    selected
+  );
 
   const suggestions = [];
 

@@ -1660,6 +1660,9 @@ async function showDiscovery(ctx) {
       `Pesquisa automática: ${marketplaceNames(
         automaticMarketplaces()
       )}\n` +
+      `📈 Tendências do dia: usadas como prioridade na Auto busca\n` +
+      `🚫 Maternidade/bebê: bloqueados na busca e nos resultados\n` +
+      `♻️ Anti-repetição: mesmo produto/similar fica bloqueado por ${config.discoveryRepeatBlockDays} dias\n` +
       `🏠 Casa: móveis + eletrodomésticos entram em todas as rodadas\n` +
       `🔄 Variedade: alternância equilibrada entre Shopee, Mercado Livre e SHEIN\n` +
       `Outros ativos por link: ${marketplaceNames(

@@ -21,6 +21,12 @@ const defaults = {
   aiProvider: 'auto',
   safeCouponsOnly: true,
   lastTrendsSentDate: null,
+  dailyTrendTerms: {
+    date: null,
+    terms: [],
+    updatedAt: null
+  },
+  discoverySeenProducts: [],
   enabledMarketplaces: [
     'shopee',
     'shein',
@@ -78,6 +84,40 @@ function migrate(s) {
 
   if (!Array.isArray(out.history)) {
     out.history = [];
+  }
+
+  if (!Array.isArray(out.discoverySeenProducts)) {
+    out.discoverySeenProducts = [];
+  }
+
+  // Guarda uma memória longa dos produtos que a Auto busca já mostrou.
+  // Isso evita que o mesmo item volte mesmo se ele tiver sido ignorado.
+  out.discoverySeenProducts =
+    out.discoverySeenProducts
+      .filter(
+        (x) =>
+          x &&
+          (x.key || x.titleKey)
+      )
+      .slice(0, 5000);
+
+  if (
+    !out.dailyTrendTerms ||
+    typeof out.dailyTrendTerms !== 'object'
+  ) {
+    out.dailyTrendTerms = {
+      date: null,
+      terms: [],
+      updatedAt: null
+    };
+  }
+
+  if (
+    !Array.isArray(
+      out.dailyTrendTerms.terms
+    )
+  ) {
+    out.dailyTrendTerms.terms = [];
   }
 
   if (!Array.isArray(out.suggestions)) {
