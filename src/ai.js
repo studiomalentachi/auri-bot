@@ -161,100 +161,200 @@ function facts(product) {
   return out;
 }
 
-export function fallbackOfferCopy(product) {
-  const name = String(product?.name || 'Produto').trim();
-  const price = money(product?.price);
-  const old = money(product?.originalPrice);
-  const sales = Number(product?.sales || 0);
-  const rating = Number(product?.rating || 0);
-  const discount = Number(product?.discountPct || 0);
-
-  const titles = [
-    `👀 OLHA ESSE ${name.toUpperCase()}`,
-    `🔥 ACHEI ESSE ${name.toUpperCase()}`,
-    `🛍️ PRA QUEM TAVA PROCURANDO ${name.toUpperCase()}`,
-    `😳 OLHA O VALOR DESSE ${name.toUpperCase()}`
-  ];
-
-  const lines = [titles[Math.floor(Math.random() * titles.length)]];
-  if (old && price && Number(product.originalPrice) > Number(product.price)) {
-    lines.push(`\nDe ~${old}~ por *${price}*`);
-  } else if (price) {
-    lines.push(`\n*${price}*`);
-  }
-  if (discount > 0) {
-    lines.push(`\n🔥 *${Math.round(discount)}% DE DESCONTO*`);
-  }
-  if (sales > 0) {
-    lines.push(`\n🛒 ${sales.toLocaleString('pt-BR')} vendas confirmadas`);
-  }
-  if (rating > 0) {
-    lines.push(`\n⭐ Nota ${rating.toFixed(1).replace('.', ',')}`);
-  }
-
-  const coupon = String(
-    product?.couponCode ||
-    product?.coupon ||
-    ''
-  ).trim();
+function cleanProductName(value) {
+  const raw =
+    String(
+      value ||
+      'Produto'
+    )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim();
 
   if (
-    product?.couponVerified === true &&
-    coupon
+    raw.length <= 150
   ) {
+    return raw;
+  }
+
+  const cut =
+    raw.slice(
+      0,
+      150
+    );
+
+  const lastSpace =
+    cut.lastIndexOf(
+      ' '
+    );
+
+  return (
+    lastSpace > 90
+      ? cut.slice(
+          0,
+          lastSpace
+        )
+      : cut
+  ).trim();
+}
+
+function verifiedPrice(product) {
+  return money(
+    product?.price
+  );
+}
+
+function verifiedDiscount(product) {
+  const pct =
+    Number(
+      product?.discountPct ||
+      0
+    );
+
+  return (
+    Number.isFinite(
+      pct
+    ) &&
+    pct > 0
+  )
+    ? Math.round(pct)
+    : 0;
+}
+
+function verifiedRating(product) {
+  const rating =
+    Number(
+      product?.rating ||
+      0
+    );
+
+  return (
+    Number.isFinite(
+      rating
+    ) &&
+    rating > 0
+  )
+    ? rating
+    : 0;
+}
+
+const OFFER_TITLES = [
+  'ACHADINHO 🛍️',
+  'OLHA ESSE ACHADO 👀',
+  'ACHEI ISSO AQUI 😍',
+  'ACHADO DO DIA ✨',
+  'OFERTA BOA DEMAIS 🔥',
+  'OLHA O QUE EU ACHEI 🛒',
+  'ESSE VALE O CLIQUE 👀',
+  'PASSANDO PRA DEIXAR ESSE ACHADO ✨',
+  'ENCONTREI ESSE AQUI 🛍️',
+  'ACHADINHO DA VEZ 💜'
+];
+
+function nextTitle(product) {
+  const seed =
+    String(
+      product?.itemId ||
+      product?.name ||
+      Date.now()
+    );
+
+  let hash = 0;
+
+  for (
+    let i = 0;
+    i < seed.length;
+    i += 1
+  ) {
+    hash =
+      (
+        hash * 31 +
+        seed.charCodeAt(i)
+      ) >>> 0;
+  }
+
+  const jitter =
+    Math.floor(
+      Math.random() *
+      OFFER_TITLES.length
+    );
+
+  return OFFER_TITLES[
+    (
+      hash +
+      jitter
+    ) %
+    OFFER_TITLES.length
+  ];
+}
+
+export function fallbackOfferCopy(product) {
+  const title =
+    nextTitle(product);
+
+  const name =
+    cleanProductName(
+      product?.name
+    );
+
+  const price =
+    verifiedPrice(product);
+
+  const discount =
+    verifiedDiscount(product);
+
+  const rating =
+    verifiedRating(product);
+
+  const lines = [
+    title,
+    '',
+    name,
+    ''
+  ];
+
+  if (price) {
     lines.push(
-      `\n🎟️ Cupom: *${coupon}*`
+      `Por: *${price}*`
     );
   }
 
-  return lines.join('\n');
+  if (discount > 0) {
+    lines.push(
+      `Desconto: ${discount}%`
+    );
+  }
+
+  if (rating > 0) {
+    lines.push(
+      `Nota: ${rating
+        .toFixed(1)
+        .replace('.', ',')}`
+    );
+  }
+
+  return lines
+    .join('\n')
+    .trim();
 }
 
-export async function generateOfferCopy(product, extra = '') {
-  const verified = facts(product);
-
-  const prompt = `Escreva uma mensagem CURTA para um grupo brasileiro de achadinhos no WhatsApp.
-
-REGRA ABSOLUTA:
-Use SOMENTE fatos presentes em FATOS VERIFICADOS.
-Não deduza, não complete e não invente nada.
-
-FATOS VERIFICADOS:
-${verified.map((x) => `- ${x}`).join('\n')}
-
-FONTE: ${product?.dataSource || 'fonte verificada'}
-
-ESTILO:
-- título em CAIXA ALTA com 1 emoji;
-- 3 a 7 blocos curtos;
-- preço com *asteriscos*;
-- mostre vendas confirmadas;
-- mostre desconto/nota somente se constarem nos fatos;
-- tom espontâneo, de achadinho.
-
-PROIBIDO:
-- inventar material, tamanho, cor, fragrância, benefício, uso, público, frete, cupom, desconto, urgência, originalidade ou qualidade;
-- dizer "chique", "premium", "luxuoso", "confortável", "resistente", "perfeito" etc. se isso não estiver nos fatos;
-- escrever link;
-- escrever "Compre aqui";
-- acrescentar qualquer detalhe ausente dos FATOS VERIFICADOS.
-
-${extra ? `OBSERVAÇÃO: ${extra}` : ''}
-
-Retorne SOMENTE a mensagem final.`;
-
-  try {
-    const result = await askAI(prompt);
-    return {
-      text: result.text || fallbackOfferCopy(product),
-      provider: result.provider,
-      fallback: false
-    };
-  } catch {
-    return {
-      text: fallbackOfferCopy(product),
-      provider: 'local',
-      fallback: true
-    };
-  }
+export async function generateOfferCopy(
+  product,
+  extra = ''
+) {
+  // O texto do WhatsApp segue um formato fixo.
+  // A variação fica no título.
+  // O link é acrescentado automaticamente pelo whatsapp.js.
+  return {
+    text:
+      fallbackOfferCopy(
+        product
+      ),
+    provider:
+      'local-format',
+    fallback:
+      false
+  };
 }
