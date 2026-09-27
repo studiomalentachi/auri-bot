@@ -1572,6 +1572,13 @@ async function renderApprovalCard(ctx, item) {
     ]);
   }
 
+  rows.push([
+    Markup.button.callback(
+      '🗑️ Apagar tudo da caixa',
+      'sugclear:ask'
+    )
+  ]);
+
   const numberText =
     current.index >= 0
       ? `📥 ${current.index + 1} de ${current.total}`
@@ -4342,6 +4349,168 @@ export function startTelegram({ token, adminId }) {
         'Depois ela mostra a prévia final antes de salvar na fila.',
       Markup.keyboard([[BTN.cancel]]).resize()
     );
+  });
+
+  bot.action('sugclear:ask', async (ctx) => {
+    const total =
+      (readStore().suggestions || [])
+        .length;
+
+    await ctx.answerCbQuery();
+
+    if (!total) {
+      drafts.delete(
+        ctx.from.id
+      );
+
+      return ctx.reply(
+        '📥 A caixa de aprovação já está vazia.',
+        mainMenu()
+      );
+    }
+
+    return ctx.reply(
+      `🗑️ Apagar TODAS as ${total} sugestão(ões) da Caixa de aprovação?\n\n` +
+        'Isso não apaga a fila de envio nem o histórico anti-repetição.',
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '🗑️ Sim, apagar tudo',
+            'sugclear:confirm'
+          )
+        ],
+        [
+          Markup.button.callback(
+            '🔄 Apagar e buscar novos',
+            'sugclear:refresh'
+          )
+        ],
+        [
+          Markup.button.callback(
+            '↩️ Cancelar',
+            'sugclear:cancel'
+          )
+        ]
+      ])
+    );
+  });
+
+  bot.action('sugclear:cancel', async (ctx) => {
+    await ctx.answerCbQuery(
+      'Cancelado'
+    );
+
+    return ctx.reply(
+      '✅ Nada foi apagado.',
+      mainMenu()
+    );
+  });
+
+  bot.action('sugclear:confirm', async (ctx) => {
+    const total =
+      (readStore().suggestions || [])
+        .length;
+
+    updateStore((s) => {
+      s.suggestions = [];
+      return s;
+    });
+
+    drafts.delete(
+      ctx.from.id
+    );
+
+    await ctx.answerCbQuery(
+      'Caixa limpa'
+    );
+
+    try {
+      await ctx.editMessageText(
+        `🗑️ Caixa de aprovação limpa.\n\n${total} sugestão(ões) removida(s).`
+      );
+    } catch {}
+
+    return ctx.reply(
+      '📥 Pronto. A Caixa de aprovação está vazia.\n\nQuando quiser, vá em 🤖 Auto busca → 🔎 Buscar agora.',
+      mainMenu()
+    );
+  });
+
+  bot.action('sugclear:refresh', async (ctx) => {
+    const total =
+      (readStore().suggestions || [])
+        .length;
+
+    updateStore((s) => {
+      s.suggestions = [];
+      return s;
+    });
+
+    drafts.delete(
+      ctx.from.id
+    );
+
+    await ctx.answerCbQuery(
+      'Limpando e buscando…'
+    );
+
+    await ctx.reply(
+      `🗑️ Removi ${total} sugestão(ões).\n\n⏳ Agora vou pesquisar produtos novos usando tendências do dia, época/estação, variedade e o histórico anti-repetição.`
+    );
+
+    try {
+      const trendState =
+        readStore()
+          .dailyTrendTerms;
+
+      const today =
+        new Intl.DateTimeFormat(
+          'en-CA',
+          {
+            timeZone:
+              config.timezone,
+            year:
+              'numeric',
+            month:
+              '2-digit',
+            day:
+              '2-digit'
+          }
+        )
+          .format(
+            new Date()
+          );
+
+      if (
+        trendState?.date !==
+          today ||
+        !trendState?.terms?.length
+      ) {
+        await buildTrendDigest();
+      }
+
+      const list =
+        await discoverWebOffers({
+          force: true
+        });
+
+      const current =
+        readStore();
+
+      return ctx.reply(
+        `✅ Nova busca concluída.\n\n` +
+          `Encontradas nesta rodada: ${list.length}\n` +
+          `Na Caixa de aprovação agora: ${(current.suggestions || []).length}\n` +
+          `Na fila automática: ${(current.queue || []).length}`,
+        mainMenu()
+      );
+    } catch (e) {
+      return ctx.reply(
+        `⚠️ A caixa foi limpa, mas a nova busca não terminou: ${e.message}\n\n` +
+          'Você pode tentar novamente em 🤖 Auto busca → 🔎 Buscar agora.',
+        mainMenu()
+      );
+    }
   });
 
   bot.action(/^ignore:(.+)$/, async (ctx) => {
