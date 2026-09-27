@@ -370,6 +370,227 @@ function todayTrendTerms() {
     );
 }
 
+function sentTodayTitles() {
+  const s =
+    readStore();
+
+  const today =
+    localIsoDate();
+
+  return (
+    s.history || []
+  )
+    .filter(
+      (x) =>
+        String(
+          x.sentAt || ''
+        ).slice(
+          0,
+          10
+        ) === today
+    )
+    .map(
+      (x) =>
+        String(
+          x.title || ''
+        ).trim()
+    )
+    .filter(Boolean);
+}
+
+function termCoveredToday(term) {
+  const normalized =
+    normalizeText(term);
+
+  if (!normalized) {
+    return false;
+  }
+
+  const titles =
+    sentTodayTitles();
+
+  return titles.some(
+    (title) => {
+      const t =
+        normalizeText(title);
+
+      return (
+        t.includes(
+          normalized
+        ) ||
+        normalized.includes(
+          t
+        ) ||
+        titleSimilarity(
+          term,
+          title
+        ) >= 0.62
+      );
+    }
+  );
+}
+
+function similarToSentToday(product) {
+  const name =
+    String(
+      product?.name || ''
+    ).trim();
+
+  if (!name) {
+    return false;
+  }
+
+  return sentTodayTitles()
+    .some(
+      (title) =>
+        titleSimilarity(
+          name,
+          title
+        ) >= 0.72
+    );
+}
+
+function hasConfirmedAffiliate(product) {
+  const affiliate =
+    String(
+      product?.affiliateLink ||
+      ''
+    ).trim();
+
+  const publicLink =
+    String(
+      product?.publicLink ||
+      product?.canonicalUrl ||
+      product?.productLink ||
+      ''
+    ).trim();
+
+  return Boolean(
+    affiliate &&
+    (
+      !publicLink ||
+      affiliate !== publicLink
+    )
+  );
+}
+
+function stableShopeePrice(product) {
+  const min =
+    Number(
+      product?.priceMin ||
+      product?.price ||
+      0
+    );
+
+  const max =
+    Number(
+      product?.priceMax ||
+      min
+    );
+
+  if (
+    min <= 0 ||
+    max <= 0
+  ) {
+    return false;
+  }
+
+  // Variações com preços diferentes são seguras para aprovação manual,
+  // mas não entram na Auto fila porque "Por:" poderia não representar
+  // a variação que a pessoa abriria.
+  return (
+    Math.abs(
+      max - min
+    ) < 0.01
+  );
+}
+
+function autoQueueEligibility(product) {
+  if (
+    !product ||
+    isMaternityBlocked(
+      product
+    )
+  ) {
+    return {
+      safe: false,
+      reason:
+        'categoria bloqueada'
+    };
+  }
+
+  if (
+    !product.factsVerified ||
+    Number(
+      product.price || 0
+    ) <= 0 ||
+    Number(
+      product.sales || 0
+    ) < MIN_SALES()
+  ) {
+    return {
+      safe: false,
+      reason:
+        'dados insuficientes'
+    };
+  }
+
+  if (
+    !hasConfirmedAffiliate(
+      product
+    )
+  ) {
+    return {
+      safe: false,
+      reason:
+        'link afiliado não confirmado'
+    };
+  }
+
+  if (
+    product.platform ===
+      'shopee'
+  ) {
+    if (
+      !product.itemId ||
+      !product.shopId
+    ) {
+      return {
+        safe: false,
+        reason:
+          'identificação Shopee incompleta'
+      };
+    }
+
+    if (
+      !stableShopeePrice(
+        product
+      )
+    ) {
+      return {
+        safe: false,
+        reason:
+          'produto com variações de preço'
+      };
+    }
+
+    return {
+      safe: true,
+      reason:
+        'Shopee verificada'
+    };
+  }
+
+  // Mercado Livre e SHEIN continuam sendo pesquisados normalmente,
+  // mas não entram sozinhos na fila enquanto a Auri não tiver um
+  // link afiliado confirmado para esses marketplaces.
+  return {
+    safe: false,
+    reason:
+      'marketplace exige link afiliado confirmado'
+  };
+}
+
 function nextCategories() {
   const s = readStore();
 
@@ -451,6 +672,9 @@ function nextCategories() {
   ) {
     if (
       keyword &&
+      !termCoveredToday(
+        keyword
+      ) &&
       !picked.includes(
         keyword
       )
@@ -471,6 +695,9 @@ function nextCategories() {
   ) {
     if (
       keyword &&
+      !termCoveredToday(
+        keyword
+      ) &&
       !picked.includes(
         keyword
       )
@@ -486,20 +713,38 @@ function nextCategories() {
     i < homeSlots;
     i += 1
   ) {
-    picked.push(
+    const keyword =
       home[
         homeIdx %
         home.length
-      ]
-    );
+      ];
 
     homeIdx += 1;
+
+    if (
+      !termCoveredToday(
+        keyword
+      ) &&
+      !picked.includes(
+        keyword
+      )
+    ) {
+      picked.push(
+        keyword
+      );
+    }
   }
+
+  let generalAttempts = 0;
 
   while (
     picked.length <
-    total
+      total &&
+    generalAttempts <
+      general.length * 3
   ) {
+    generalAttempts += 1;
+
     const keyword =
       general[
         generalIdx %
@@ -512,6 +757,9 @@ function nextCategories() {
       !isMaternityBlocked(
         keyword
       ) &&
+      !termCoveredToday(
+        keyword
+      ) &&
       !picked.includes(
         keyword
       )
@@ -519,6 +767,35 @@ function nextCategories() {
       picked.push(
         keyword
       );
+    }
+  }
+
+  if (
+    picked.length <
+    total
+  ) {
+    for (
+      const keyword of general
+    ) {
+      if (
+        picked.length >=
+        total
+      ) {
+        break;
+      }
+
+      if (
+        !isMaternityBlocked(
+          keyword
+        ) &&
+        !picked.includes(
+          keyword
+        )
+      ) {
+        picked.push(
+          keyword
+        );
+      }
     }
   }
 
@@ -1296,6 +1573,14 @@ async function fetchSheinVerified(
   }
 }
 
+export async function refreshSheinProduct(
+  url
+) {
+  return fetchSheinVerified(
+    url
+  );
+}
+
 async function discoverShein(
   categories
 ) {
@@ -1672,6 +1957,9 @@ export async function discoverWebOffers({
             p.affiliateLink ||
             p.publicLink ||
             p.canonicalUrl
+          ) ||
+          similarToSentToday(
+            p
           )
         ) {
           continue;
@@ -1727,6 +2015,11 @@ export async function discoverWebOffers({
         ).trim()
       );
 
+    const eligibility =
+      autoQueueEligibility(
+        product
+      );
+
     suggestions.push({
       id:
         crypto.randomBytes(4)
@@ -1758,13 +2051,94 @@ export async function discoverWebOffers({
       keyword:
         categories.join(', '),
       createdAt:
-        new Date().toISOString()
+        new Date().toISOString(),
+      autoQueueSafe:
+        eligibility.safe,
+      autoQueueReason:
+        eligibility.reason
     });
   }
 
   updateStore((x) => {
+    let approval =
+      suggestions;
+
+    if (
+      x.autoQueueDiscovery
+    ) {
+      const available =
+        Math.max(
+          0,
+          Number(
+            config.autoQueueMaxSize ||
+            85
+          ) -
+          (
+            x.queue?.length ||
+            0
+          )
+        );
+
+      const safe =
+        suggestions
+          .filter(
+            (item) =>
+              item.autoQueueSafe ===
+                true &&
+              !item.needsAffiliateLink
+          )
+          .slice(
+            0,
+            available
+          );
+
+      const safeIds =
+        new Set(
+          safe.map(
+            (x) =>
+              String(x.id)
+          )
+        );
+
+      for (
+        const item of safe
+      ) {
+        x.queue.push({
+          ...item,
+          autoQueued:
+            true,
+          verificationStatus:
+            'verified-at-discovery',
+          queuedAt:
+            new Date()
+              .toISOString()
+        });
+      }
+
+      approval =
+        suggestions.filter(
+          (item) =>
+            !safeIds.has(
+              String(
+                item.id
+              )
+            )
+        );
+
+      x.metrics.autoQueued +=
+        safe.length;
+
+      x.metrics
+        .blockedUnsafeAutoQueue +=
+        approval.filter(
+          (item) =>
+            item.autoQueueSafe !==
+            true
+        ).length;
+    }
+
     x.suggestions = [
-      ...suggestions,
+      ...approval,
       ...(x.suggestions || [])
     ].slice(
       0,

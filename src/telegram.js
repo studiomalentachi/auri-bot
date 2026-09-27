@@ -1657,6 +1657,7 @@ async function showDiscovery(ctx) {
   await ctx.reply(
     `🤖 Pesquisa automática da Auri\n\n` +
       `Pesquisa web real: ${s.autoDiscovery ? '✅ ligada' : '❌ desligada'}\n` +
+      `Auto fila segura: ${s.autoQueueDiscovery ? '✅ ligada' : '❌ desligada'}\n` +
       `Pesquisa automática: ${marketplaceNames(
         automaticMarketplaces()
       )}\n` +
@@ -1677,7 +1678,8 @@ async function showDiscovery(ctx) {
       `Rodada: até ${config.discoveryMaxPerRun} produtos\n` +
       `Intervalo: ${config.discoveryEveryMinutes} min\n` +
       `Meta de envio: até 85/dia (08:00–22:00, a cada 10 min)\n\n` +
-      `🔐 Shopee: quando a Affiliate Open API devolver um link de afiliada confirmado, você pode abrir esse link, conferir e só depois usar. Se preferir, pode substituí-lo pelo seu próprio link. SHEIN e Mercado Livre continuam pedindo o seu link de afiliada.`,
+      `🔐 Auto fila segura: só entra sozinha uma oferta com preço confirmado e link de afiliada confirmado. Antes de cada envio, a Auri consulta o produto novamente e recria o texto com o preço/desconto atual. Se não conseguir confirmar, ela NÃO envia e devolve a oferta para revisão.\n\n` +
+      `🧡 Hoje isso permite automação realmente sem toque principalmente na Shopee. Mercado Livre e SHEIN continuam sendo pesquisados e variando normalmente, mas ficam para aprovação enquanto o link de afiliada automático não estiver confirmado.`,
     Markup.inlineKeyboard([
       [
         Markup.button.callback(
@@ -1685,6 +1687,14 @@ async function showDiscovery(ctx) {
             ? '⏹ Desligar pesquisa'
             : '▶️ Ligar pesquisa',
           'disc:toggle'
+        )
+      ],
+      [
+        Markup.button.callback(
+          s.autoQueueDiscovery
+            ? '⏹ Desligar Auto fila'
+            : '▶️ Ligar Auto fila segura',
+          'disc:autoqueue'
         )
       ],
       [
@@ -4915,10 +4925,65 @@ export function startTelegram({ token, adminId }) {
     await showDiscovery(ctx);
   });
 
+  bot.action('disc:autoqueue', async (ctx) => {
+    const next =
+      updateStore((s) => {
+        s.autoQueueDiscovery =
+          !s.autoQueueDiscovery;
+
+        if (
+          s.autoQueueDiscovery
+        ) {
+          s.autoDiscovery =
+            true;
+        }
+
+        return s;
+      });
+
+    await ctx.answerCbQuery(
+      next.autoQueueDiscovery
+        ? 'Auto fila segura ligada'
+        : 'Auto fila desligada'
+    );
+
+    await showDiscovery(ctx);
+  });
+
   bot.action('disc:now', async (ctx) => {
     await ctx.answerCbQuery('Buscando…');
 
     try {
+      const trendState =
+        readStore()
+          .dailyTrendTerms;
+
+      const today =
+        new Intl.DateTimeFormat(
+          'en-CA',
+          {
+            timeZone:
+              config.timezone,
+            year:
+              'numeric',
+            month:
+              '2-digit',
+            day:
+              '2-digit'
+          }
+        )
+          .format(
+            new Date()
+          );
+
+      if (
+        trendState?.date !==
+          today ||
+        !trendState?.terms?.length
+      ) {
+        await buildTrendDigest();
+      }
+
       const list = await discoverWebOffers({
         force: true
       });

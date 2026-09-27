@@ -1,11 +1,15 @@
 import { config } from './config.js';
 import { generateOfferCopy } from './ai.js';
-import { discoverWebOffers } from './discovery.js';
+import { discoverWebOffers, refreshSheinProduct } from './discovery.js';
 import {
   getShopeeProduct,
   generateShopeeShortLink,
   isShopeeConfigured
 } from './shopee.js';
+import {
+  getMeliProduct,
+  getMeliProductFromUrl
+} from './mercadolivre.js';
 import {
   markSent,
   readStore,
@@ -198,6 +202,49 @@ function removeUnverifiedCouponClaims(
   return item;
 }
 
+function stableShopeePrice(product) {
+  const min =
+    Number(
+      product?.priceMin ||
+      product?.price ||
+      0
+    );
+
+  const max =
+    Number(
+      product?.priceMax ||
+      min
+    );
+
+  return (
+    min > 0 &&
+    max > 0 &&
+    Math.abs(
+      max - min
+    ) < 0.01
+  );
+}
+
+function mergeFreshProduct(
+  oldProduct,
+  fresh
+) {
+  return {
+    ...oldProduct,
+    ...fresh,
+    affiliateLink:
+      oldProduct?.affiliateLink ||
+      fresh?.affiliateLink ||
+      null,
+    publicLink:
+      fresh?.publicLink ||
+      oldProduct?.publicLink ||
+      fresh?.canonicalUrl ||
+      oldProduct?.canonicalUrl ||
+      null
+  };
+}
+
 async function refreshBeforeSend(
   item
 ) {
@@ -206,91 +253,194 @@ async function refreshBeforeSend(
       item
     );
 
-  if (
-    item.product?.platform !==
-      'shopee' ||
-    !isShopeeConfigured() ||
-    !item.product.itemId ||
-    !item.product.shopId
-  ) {
-    return item;
-  }
+  const platform =
+    item.product?.platform;
+
+  let fresh =
+    null;
 
   try {
-    const fresh =
-      await getShopeeProduct({
-        itemId:
-          item.product
-            .itemId,
-        shopId:
-          item.product
-            .shopId
-      });
-
-    if (!fresh) {
-      throw new Error(
-        'Produto não encontrado na API'
-      );
-    }
-
-    fresh.affiliateLink =
-      await generateShopeeShortLink(
-        fresh.productLink,
-        [
-          'whatsapp',
-          'auri'
-        ]
-      );
-
-    const oldPrice =
-      Number(
-        item.product.price ||
-        0
-      );
-
-    const newPrice =
-      Number(
-        fresh.price ||
-        0
-      );
-
-    const changed =
-      oldPrice > 0 &&
-      newPrice > 0 &&
-      Math.abs(
-        newPrice -
-        oldPrice
-      ) >= 0.01;
-
-    item.product =
-      fresh;
-
-    item.link =
-      fresh.affiliateLink ||
-      item.link;
-
     if (
-      changed &&
-      item.aiGenerated
+      platform ===
+        'shopee'
     ) {
-      const copy =
-        await generateOfferCopy(
-          fresh,
-          'O preço foi atualizado antes do envio.'
+      if (
+        !isShopeeConfigured() ||
+        !item.product?.itemId ||
+        !item.product?.shopId
+      ) {
+        throw new Error(
+          'Shopee sem dados suficientes para revalidar.'
+        );
+      }
+
+      fresh =
+        await getShopeeProduct({
+          itemId:
+            item.product
+              .itemId,
+          shopId:
+            item.product
+              .shopId
+        });
+
+      if (!fresh) {
+        throw new Error(
+          'Produto Shopee não encontrado na revalidação.'
+        );
+      }
+
+      fresh.affiliateLink =
+        await generateShopeeShortLink(
+          fresh.productLink,
+          [
+            'whatsapp',
+            'auri'
+          ]
         );
 
-      item.text =
-        copy.text;
+      if (
+        item.autoQueued &&
+        config.autoQueueStrictValidation &&
+        !stableShopeePrice(
+          fresh
+        )
+      ) {
+        throw new Error(
+          'Produto Shopee tem variações com preços diferentes.'
+        );
+      }
+    } else if (
+      platform ===
+        'mercadolivre'
+    ) {
+      if (
+        item.product?.itemId
+      ) {
+        fresh =
+          await getMeliProduct(
+            item.product.itemId
+          );
+      } else {
+        fresh =
+          await getMeliProductFromUrl(
+            item.product?.canonicalUrl ||
+            item.publicLink ||
+            item.link
+          );
+      }
 
-      item.aiProvider =
-        copy.provider;
+      if (
+        !fresh ||
+        Number(
+          fresh.price || 0
+        ) <= 0
+      ) {
+        throw new Error(
+          'Mercado Livre não confirmou o preço atual.'
+        );
+      }
+    } else if (
+      platform ===
+        'shein'
+    ) {
+      fresh =
+        await refreshSheinProduct(
+          item.product?.canonicalUrl ||
+          item.publicLink ||
+          item.link
+        );
+
+      if (
+        !fresh ||
+        Number(
+          fresh.price || 0
+        ) <= 0
+      ) {
+        throw new Error(
+          'SHEIN não confirmou o preço atual.'
+        );
+      }
+    } else {
+      // Ofertas manuais continuam como estão.
+      return {
+        item,
+        verified:
+          false,
+        manual:
+          true
+      };
     }
-  } catch (e) {
-    item.refreshWarning =
-      e.message;
-  }
 
-  return item;
+    const merged =
+      mergeFreshProduct(
+        item.product,
+        fresh
+      );
+
+    if (
+      Number(
+        merged.price || 0
+      ) <= 0
+    ) {
+      throw new Error(
+        'Preço atual inválido.'
+      );
+    }
+
+    item.product =
+      merged;
+
+    item.link =
+      merged.affiliateLink ||
+      item.link;
+
+    // Sempre recria o texto com os números acabados de validar.
+    const copy =
+      await generateOfferCopy(
+        merged,
+        'Revalidação imediatamente antes do envio.'
+      );
+
+    item.text =
+      copy.text;
+
+    item.aiProvider =
+      copy.provider;
+
+    item.verifiedAt =
+      new Date()
+        .toISOString();
+
+    item.verificationStatus =
+      'fresh-before-send';
+
+    updateStore((x) => {
+      x.metrics
+        .refreshedBeforeSend +=
+        1;
+
+      return x;
+    });
+
+    return {
+      item,
+      verified:
+        true,
+      manual:
+        false
+    };
+  } catch (e) {
+    return {
+      item,
+      verified:
+        false,
+      manual:
+        false,
+      error:
+        e.message
+    };
+  }
 }
 
 export async function sendOneNow() {
@@ -335,10 +485,62 @@ export async function sendOneNow() {
       );
     }
 
-    const item =
+    const refreshed =
       await refreshBeforeSend({
         ...s.queue[0]
       });
+
+    // Auto fila: se não conseguir confirmar o valor atual,
+    // NÃO envia um texto potencialmente errado.
+    if (
+      refreshed.item?.autoQueued &&
+      !refreshed.verified
+    ) {
+      updateStore((x) => {
+        const blocked =
+          x.queue.shift();
+
+        if (blocked) {
+          x.suggestions.unshift({
+            ...blocked,
+            autoQueued:
+              false,
+            needsReview:
+              true,
+            verificationWarning:
+              refreshed.error ||
+              'Não consegui revalidar os dados antes do envio.'
+          });
+
+          x.suggestions =
+            x.suggestions.slice(
+              0,
+              config.discoverySuggestionCap
+            );
+        }
+
+        x.metrics
+          .quarantinedBeforeSend +=
+          1;
+
+        return x;
+      });
+
+      return {
+        item:
+          refreshed.item,
+        sentCount:
+          0,
+        skipped:
+          true,
+        reason:
+          refreshed.error ||
+          'Revalidação falhou.'
+      };
+    }
+
+    const item =
+      refreshed.item;
 
     const sentCount =
       await sendOfferToGroups(
@@ -360,7 +562,9 @@ export async function sendOneNow() {
 
     return {
       item,
-      sentCount
+      sentCount,
+      skipped:
+        false
     };
   } finally {
     busy = false;
@@ -422,6 +626,34 @@ async function maybeSendDailyTrends(
   }
 }
 
+async function ensureDailyTrendData() {
+  const today =
+    nowParts().date;
+
+  const s =
+    readStore();
+
+  if (
+    s.dailyTrendTerms?.date ===
+      today &&
+    Array.isArray(
+      s.dailyTrendTerms?.terms
+    ) &&
+    s.dailyTrendTerms.terms.length
+  ) {
+    return;
+  }
+
+  try {
+    await buildTrendDigest();
+  } catch (e) {
+    console.error(
+      'Tendências para Auto busca:',
+      e.message
+    );
+  }
+}
+
 async function tick({
   telegram,
   adminId
@@ -454,6 +686,16 @@ async function tick({
     }
   }
 
+  if (
+    telegram &&
+    adminId
+  ) {
+    await maybeSendDailyTrends(
+      telegram,
+      adminId
+    );
+  }
+
   const ds =
     discoverySlot();
 
@@ -466,6 +708,8 @@ async function tick({
     lastDiscoverySlot =
       ds;
 
+    await ensureDailyTrendData();
+
     discoverWebOffers()
       .catch(
         (e) =>
@@ -474,16 +718,6 @@ async function tick({
             e.message
           )
       );
-  }
-
-  if (
-    telegram &&
-    adminId
-  ) {
-    await maybeSendDailyTrends(
-      telegram,
-      adminId
-    );
   }
 }
 

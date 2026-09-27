@@ -25,6 +25,8 @@ export const config = {
   trendsTermsPerMarketplace: Math.max(3, Math.min(8, envInt('TRENDS_TERMS_PER_MARKETPLACE', 5))),
   trendsSeedsPerMarketplace: Math.max(4, Math.min(8, envInt('TRENDS_SEEDS_PER_MARKETPLACE', 6))),
   discoveryRepeatBlockDays: Math.max(30, envInt('AUTO_DISCOVERY_REPEAT_BLOCK_DAYS', 120)),
+  autoQueueMaxSize: Math.max(10, Math.min(120, envInt('AUTO_QUEUE_MAX_SIZE', 85))),
+  autoQueueStrictValidation: envBool('AUTO_QUEUE_STRICT_VALIDATION', true),
   discoveryEveryMinutes: Math.max(60, envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)),
   discoveryMaxPerRun: Math.max(10, envInt('AUTO_DISCOVERY_MAX_PER_RUN', 30)),
   discoveryDailyTarget: Math.max(1, envInt('AUTO_DISCOVERY_DAILY_TARGET', 85)),

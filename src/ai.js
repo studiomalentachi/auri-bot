@@ -1,4 +1,4 @@
-import { readStore } from './store.js';
+import { readStore, updateStore } from './store.js';
 
 function cleanText(s) {
   return String(s || '').trim().replace(/^```(?:text)?\s*/i, '').replace(/```$/, '').trim();
@@ -254,40 +254,31 @@ const OFFER_TITLES = [
 ];
 
 function nextTitle(product) {
-  const seed =
-    String(
-      product?.itemId ||
-      product?.name ||
-      Date.now()
-    );
+  let selected =
+    OFFER_TITLES[0];
 
-  let hash = 0;
+  updateStore((s) => {
+    const current =
+      Number(
+        s.copyTitleIndex || 0
+      );
 
-  for (
-    let i = 0;
-    i < seed.length;
-    i += 1
-  ) {
-    hash =
+    selected =
+      OFFER_TITLES[
+        current %
+        OFFER_TITLES.length
+      ];
+
+    s.copyTitleIndex =
       (
-        hash * 31 +
-        seed.charCodeAt(i)
-      ) >>> 0;
-  }
+        current + 1
+      ) %
+      OFFER_TITLES.length;
 
-  const jitter =
-    Math.floor(
-      Math.random() *
-      OFFER_TITLES.length
-    );
+    return s;
+  });
 
-  return OFFER_TITLES[
-    (
-      hash +
-      jitter
-    ) %
-    OFFER_TITLES.length
-  ];
+  return selected;
 }
 
 export function fallbackOfferCopy(product) {

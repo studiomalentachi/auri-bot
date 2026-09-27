@@ -45,7 +45,11 @@ const defaults = {
     sentMessages: 0,
     blockedDuplicates: 0,
     blockedCoupons: 0,
-    discoveryRuns: 0
+    discoveryRuns: 0,
+    autoQueued: 0,
+    blockedUnsafeAutoQueue: 0,
+    refreshedBeforeSend: 0,
+    quarantinedBeforeSend: 0
   }
 };
 
