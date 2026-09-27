@@ -6,7 +6,6 @@ import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
 import { discoverWebOffers, searchSheinOffers, refreshSheinProduct } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
-import { looksLikeShopeeLink, importShopeeAffiliateLink } from './shopee-link.js';
 import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad, getShopeeProduct, getShopeeLiveProduct } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode, formatOfferMessage } from './whatsapp.js';
@@ -1022,8 +1021,8 @@ async function beginLink(ctx) {
 
   await ctx.reply(
     '🔗 Cole o link do produto.\n\n' +
-      '🧡 Se for o seu link de afiliada da Shopee, a Auri tenta identificar automaticamente produto, nome, preço, desconto, nota e foto.\n\n' +
-      'Você não precisa preencher tudo manualmente.',
+      'Enquanto a Shopee Open API não estiver liberada, eu vou te pedir nome, preço, desconto e cupom. ' +
+      'Depois eu monto o texto no seu estilo.',
     Markup.keyboard([[BTN.cancel]]).resize()
   );
 }
@@ -2751,94 +2750,10 @@ export function startTelegram({ token, adminId }) {
     }
 
     if (d.step === 'product_url') {
-      await ctx.reply(
-        '⏳ Abrindo o link e identificando o produto…'
-      );
+      await ctx.reply('⏳ Buscando dados do produto…');
 
       try {
-        // SHOPEE:
-        // se você colar seu próprio link de afiliada, a Auri resolve
-        // o redirecionamento, descobre o item e busca os dados sozinha.
-        if (
-          looksLikeShopeeLink(
-            text
-          )
-        ) {
-          const product =
-            await importShopeeAffiliateLink(
-              text
-            );
-
-          d.data.product =
-            product;
-
-          // Preserva EXATAMENTE o link que você enviou.
-          d.data.link =
-            String(
-              text
-            ).trim();
-
-          d.data.id =
-            crypto.randomBytes(3)
-              .toString('hex');
-
-          d.data.photoPath =
-            null;
-
-          d.data.product
-            .affiliateLink =
-            d.data.link;
-
-          await ctx.reply(
-            '✅ Produto identificado automaticamente!\n\n' +
-              `📦 ${product.name}\n` +
-              `💰 ${moneyBR(product.price)}\n` +
-              `${
-                Number(
-                  product.discountPct ||
-                  0
-                ) > 0
-                  ? `🔥 ${Math.round(
-                      Number(
-                        product.discountPct
-                      )
-                    )}% de desconto\n`
-                  : ''
-              }` +
-              `${
-                Number(
-                  product.rating ||
-                  0
-                ) > 0
-                  ? `⭐ ${Number(
-                      product.rating
-                    )
-                      .toFixed(1)
-                      .replace('.', ',')}\n`
-                  : ''
-              }` +
-              `${
-                product.imageUrl
-                  ? '📸 Foto encontrada\n'
-                  : ''
-              }` +
-              '\n✨ Vou montar o texto para você.'
-          );
-
-          // Não pergunta nome, preço, desconto, cupom ou foto.
-          // Tudo que foi encontrado entra automaticamente; cupom pode
-          // ser adicionado depois pelos botões da prévia.
-          return finalizeDraftWithAI(
-            ctx,
-            d
-          );
-        }
-
-        // Demais marketplaces continuam usando o fluxo atual.
-        const product =
-          await importProductFromUrl(
-            text
-          );
+        const product = await importProductFromUrl(text);
 
         if (
           product?.platform ===
@@ -2858,9 +2773,7 @@ export function startTelegram({ token, adminId }) {
           }
         }
 
-        d.data.product =
-          product;
-
+        d.data.product = product;
         d.data.link =
           product.affiliateLink ||
           product.offerLink ||
@@ -2868,23 +2781,12 @@ export function startTelegram({ token, adminId }) {
           product.productLink ||
           text;
 
-        d.data.id =
-          crypto.randomBytes(3)
-            .toString('hex');
+        d.data.id = crypto.randomBytes(3).toString('hex');
 
-        return startLinkDetails(
-          ctx,
-          d
-        );
+        return startLinkDetails(ctx, d);
       } catch (e) {
-        drafts.delete(
-          ctx.from.id
-        );
-
-        return ctx.reply(
-          `⚠️ ${e.message}`,
-          mainMenu()
-        );
+        drafts.delete(ctx.from.id);
+        return ctx.reply(`⚠️ ${e.message}`, mainMenu());
       }
     }
 
