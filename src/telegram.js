@@ -8,7 +8,7 @@ import { discoverWebOffers, searchSheinOffers, refreshSheinProduct } from './dis
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
 import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad, getShopeeProduct, getShopeeLiveProduct } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
-import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
+import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode, formatOfferMessage } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
 import { buildTrendDigest } from './trends.js';
 import { buildMeliAuthorizationUrl, exchangeMeliAuthorizationCode, meliOAuthStatus, getMeliProduct, getMeliProductFromUrl } from './mercadolivre.js';
@@ -679,6 +679,12 @@ async function showQueueItem(
       Markup.button.callback(
         '✨ Outro texto',
         `q:regen:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '👁️ Prévia final do WhatsApp',
+        `q:preview:${index}:${page}`
       )
     ],
     [
@@ -1947,6 +1953,13 @@ async function renderApprovalCard(ctx, item) {
       )
     ]);
   }
+
+  rows.push([
+    Markup.button.callback(
+      '👁️ Prévia final do WhatsApp',
+      `wapreview:${id}`
+    )
+  ]);
 
   rows.push([
     Markup.button.callback(
@@ -4684,6 +4697,49 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^q:preview:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const item =
+      readStore().queue
+        ?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    await ctx.answerCbQuery(
+      'Mostrando prévia'
+    );
+
+    const finalMessage =
+      formatOfferMessage(
+        item
+      );
+
+    const photoNote =
+      (
+        item.photoPath ||
+        item.product
+          ?.imageUrl
+      )
+        ? '📸 A foto do produto também será enviada junto.\n\n'
+        : '';
+
+    return ctx.reply(
+      `👁️ PRÉVIA FINAL DO WHATSAPP\n\n` +
+        `${photoNote}` +
+        `${finalMessage}\n\n` +
+        '────────────\n' +
+        'É exatamente essa mensagem que será enviada ao grupo.'
+    );
+  });
+
   bot.action(/^q:regen:(\d+):(\d+)$/, async (ctx) => {
     const index =
       Number(
@@ -5340,6 +5396,64 @@ export function startTelegram({ token, adminId }) {
     return renderApprovalCard(
       ctx,
       d.data
+    );
+  });
+
+  bot.action(/^wapreview:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    const id =
+      String(
+        ctx.match[1]
+      );
+
+    if (
+      !d ||
+      String(
+        d.data.id
+      ) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Prévia expirou.'
+      );
+    }
+
+    await ctx.answerCbQuery(
+      'Mostrando prévia'
+    );
+
+    const previewItem = {
+      ...d.data,
+      link:
+        d.data.product
+          ?.affiliateLink ||
+        d.data.link ||
+        ''
+    };
+
+    const finalMessage =
+      formatOfferMessage(
+        previewItem
+      );
+
+    const photoNote =
+      (
+        d.data.photoPath ||
+        d.data.product
+          ?.imageUrl
+      )
+        ? '📸 A foto do produto também será enviada junto.\n\n'
+        : '';
+
+    return ctx.reply(
+      `👁️ PRÉVIA FINAL DO WHATSAPP\n\n` +
+        `${photoNote}` +
+        `${finalMessage}\n\n` +
+        '────────────\n' +
+        'É somente essa parte que vai para o grupo.'
     );
   });
 
