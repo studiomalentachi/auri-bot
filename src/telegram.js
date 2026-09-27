@@ -618,12 +618,14 @@ async function showQueueItem(
 
   const textPreview =
     String(
-      item.text || ''
+      formatOfferMessage(
+        item
+      ) || ''
     )
       .trim()
       .slice(
         0,
-        900
+        1200
       );
 
   const coupon =
@@ -1991,7 +1993,13 @@ async function renderApprovalCard(ctx, item) {
       `${facts.length ? `${facts.join('\n')}\n\n` : ''}` +
       `🎟️ CUPOM\n${couponStatus}\n\n` +
       `${linkStatus}` +
-      `✍️ TEXTO PARA O GRUPO\n\n${data.text || ''}\n\n` +
+      `✍️ TEXTO PARA O GRUPO\n\n${formatOfferMessage({
+        ...data,
+        link:
+          data.product?.affiliateLink ||
+          data.link ||
+          ''
+      })}\n\n` +
       `────────────\n` +
       `Antes de salvar, confira produto, link e texto.`,
     Markup.inlineKeyboard(rows)
