@@ -550,22 +550,25 @@ export async function getShopeeLiveProduct({
         0
       );
 
-    const discountPct =
-      Number(
-        data.raw_discount ??
-        data.show_discount ??
-        String(
-          data.discount ||
+    const discountRaw =
+      data.raw_discount ??
+      data.show_discount ??
+      String(
+        data.discount ||
+        ''
+      )
+        .replace(
+          /[^0-9.,]/g,
           ''
         )
-          .replace(
-            /[^0-9.,]/g,
-            ''
-          )
-          .replace(
-            ',',
-            '.'
-          ) ||
+        .replace(
+          ',',
+          '.'
+        );
+
+    const discountPct =
+      Number(
+        discountRaw ||
         0
       );
 
