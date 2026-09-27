@@ -590,7 +590,9 @@ async function showQueueItem(
   index,
   page = 0
 ) {
-  const s = readStore();
+  const s =
+    readStore();
+
   const queue =
     s.queue || [];
 
@@ -606,9 +608,12 @@ async function showQueueItem(
     );
   }
 
+  const product =
+    item.product || {};
+
   const platform =
     marketplaceLabel(
-      item.product?.platform
+      product.platform
     );
 
   const textPreview =
@@ -618,24 +623,62 @@ async function showQueueItem(
       .trim()
       .slice(
         0,
-        650
+        900
       );
 
+  const coupon =
+    String(
+      product.couponCode ||
+      product.coupon ||
+      ''
+    ).trim();
+
+  const hasCoupon =
+    product.couponVerified ===
+      true &&
+    Boolean(coupon);
+
   const rows = [
+    [
+      Markup.button.callback(
+        hasCoupon
+          ? '🎟️ Alterar cupom'
+          : '🎟️ Adicionar cupom',
+        `q:coupon:${index}:${page}`
+      ),
+      ...(hasCoupon
+        ? [
+            Markup.button.callback(
+              '🚫 Remover cupom',
+              `q:couponremove:${index}:${page}`
+            )
+          ]
+        : [])
+    ],
     [
       Markup.button.callback(
         '✏️ Editar texto',
         `q:edittext:${index}:${page}`
       ),
       Markup.button.callback(
-        '🔗 Editar link',
-        `q:editlink:${index}:${page}`
+        '📸 Trocar foto',
+        `q:editphoto:${index}:${page}`
       )
     ],
     [
       Markup.button.callback(
-        '📸 Trocar foto',
-        `q:editphoto:${index}:${page}`
+        '🔄 Atualizar preço',
+        `q:refresh:${index}:${page}`
+      ),
+      Markup.button.callback(
+        '✏️ Corrigir preço',
+        `q:pricefix:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '✨ Outro texto',
+        `q:regen:${index}:${page}`
       )
     ],
     [
@@ -663,38 +706,48 @@ async function showQueueItem(
         '🔢 Mover para posição',
         `q:move:${index}:${page}`
       )
-    ],
-    [
-      Markup.button.callback(
-        '🗑️ Excluir',
-        `q:delete:${index}:${page}`
-      )
-    ],
-    [
-      Markup.button.callback(
-        '⬅️ Voltar à fila',
-        `q:page:${page}`
-      )
     ]
   ];
+
+  if (
+    queue.length > 1
+  ) {
+    rows.push([
+      Markup.button.callback(
+        '➡️ Próximo da fila',
+        `q:next:${index}:${page}`
+      )
+    ]);
+  }
+
+  rows.push([
+    Markup.button.callback(
+      '🗑️ Excluir da fila',
+      `q:delete:${index}:${page}`
+    )
+  ]);
+
+  rows.push([
+    Markup.button.callback(
+      '⬅️ Voltar à fila',
+      `q:page:${page}`
+    )
+  ]);
 
   return ctx.reply(
     `📦 OFERTA ${
       Number(index) + 1
-    } DE ${queue.length}\n\n` +
-      `${platform}\n` +
+    } DE ${queue.length}\\n\\n` +
+      `${platform}\\n` +
       `📌 ${queueItemTitle(
         item
-      )}\n\n` +
-      `✍️ TEXTO\n${
-        textPreview ||
-        '— sem texto'
-      }\n\n` +
-      `🔗 LINK\n${
-        item.link ||
-        item.product?.affiliateLink ||
-        '— sem link'
-      }`,
+      )}\\n\\n` +
+      `🎟️ Cupom: ${
+        hasCoupon
+          ? coupon
+          : '—'
+      }\\n\\n` +
+      `✍️ TEXTO\\n${textPreview || '— sem texto'}`,
     Markup.inlineKeyboard(
       rows
     )
@@ -1816,37 +1869,21 @@ async function renderApprovalCard(ctx, item) {
 
   const rows = [];
 
-  if (publicLink) {
-    rows.push([
-      Markup.button.url(
-        '🔎 Abrir produto normal',
-        publicLink
-      )
-    ]);
-  }
-
   if (hasAutomaticAffiliateLink) {
-    rows.push([
-      Markup.button.url(
-        '💸 Conferir link de afiliada',
-        automaticAffiliateLink
-      )
-    ]);
-
+    // O link automático já está confirmado e é usado silenciosamente.
+    // Não mostramos mais botões de abrir/conferir/substituir link.
     rows.push([
       Markup.button.callback(
-        '✅ Usar link automático',
-        `affauto:${id}`
-      ),
-      Markup.button.callback(
-        '🔗 Substituir pelo meu link',
-        `aff:${id}`
+        '✅ Salvar na fila',
+        `sugsave:${id}`
       )
     ]);
   } else {
+    // Só aparece quando a Auri realmente NÃO tem um link de afiliada
+    // confirmado para aquela oferta.
     rows.push([
       Markup.button.callback(
-        '🔗 Colocar meu link de afiliada',
+        '🔗 Colocar link de afiliada',
         `aff:${id}`
       )
     ]);
@@ -1925,8 +1962,8 @@ async function renderApprovalCard(ctx, item) {
 
   const linkStatus =
     hasAutomaticAffiliateLink
-      ? '✅ Link automático da Shopee disponível para conferência'
-      : '⏳ Falta colocar/confirmar seu link de afiliada';
+      ? ''
+      : '🔗 LINK DE AFILIADA\n⏳ Falta colocar/confirmar seu link de afiliada\n\n';
 
   const couponStatus =
     hasVerifiedCoupon
@@ -1940,7 +1977,7 @@ async function renderApprovalCard(ctx, item) {
       `📦 ${product.name || 'Produto'}\n\n` +
       `${facts.length ? `${facts.join('\n')}\n\n` : ''}` +
       `🎟️ CUPOM\n${couponStatus}\n\n` +
-      `🔗 LINK DE AFILIADA\n${linkStatus}\n\n` +
+      `${linkStatus}` +
       `✍️ TEXTO PARA O GRUPO\n\n${data.text || ''}\n\n` +
       `────────────\n` +
       `Antes de salvar, confira produto, link e texto.`,
@@ -3193,6 +3230,204 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
+    if (
+      d.step ===
+      'queue_coupon'
+    ) {
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      const value =
+        String(
+          text || ''
+        ).trim();
+
+      updateStore((s) => {
+        const item =
+          s.queue?.[index];
+
+        if (
+          item?.product
+        ) {
+          if (
+            /^(sem cupom|sem|não|nao)$/i.test(
+              value
+            )
+          ) {
+            delete item.product
+              .couponCode;
+
+            delete item.product
+              .coupon;
+
+            item.product
+              .couponVerified =
+              false;
+          } else {
+            item.product
+              .couponCode =
+              value;
+
+            item.product
+              .couponVerified =
+              true;
+          }
+        }
+
+        return s;
+      });
+
+      const item =
+        readStore().queue
+          ?.[index];
+
+      if (item) {
+        const copy =
+          await generateOfferCopy(
+            item.product || {}
+          );
+
+        updateStore((s) => {
+          if (
+            s.queue?.[index]
+          ) {
+            s.queue[index].text =
+              copy.text;
+          }
+
+          return s;
+        });
+      }
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        '✅ Cupom atualizado.',
+        Markup.removeKeyboard()
+      );
+
+      return showQueueItem(
+        ctx,
+        index,
+        d.data.queuePage ||
+        0
+      );
+    }
+
+    if (
+      d.step ===
+      'queue_price_fix'
+    ) {
+      const value =
+        parseMoneyBR(
+          text
+        );
+
+      if (!value) {
+        return ctx.reply(
+          '⚠️ Não consegui entender o preço. Digite somente o valor, por exemplo: 77,49'
+        );
+      }
+
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      updateStore((s) => {
+        const item =
+          s.queue?.[index];
+
+        if (
+          item?.product
+        ) {
+          const product =
+            item.product;
+
+          product.price =
+            value;
+
+          product.priceMin =
+            value;
+
+          product.priceMax =
+            value;
+
+          product
+            .priceManuallyConfirmed =
+            true;
+
+          product.manualPriceAt =
+            new Date()
+              .toISOString();
+
+          const original =
+            Number(
+              product
+                .originalPrice ||
+              0
+            );
+
+          product.discountPct =
+            original > value
+              ? (
+                  (
+                    original -
+                    value
+                  ) /
+                  original
+                ) *
+                100
+              : 0;
+        }
+
+        return s;
+      });
+
+      const item =
+        readStore().queue
+          ?.[index];
+
+      if (item) {
+        const copy =
+          await generateOfferCopy(
+            item.product || {},
+            'Preço corrigido manualmente pela usuária.'
+          );
+
+        updateStore((s) => {
+          if (
+            s.queue?.[index]
+          ) {
+            s.queue[index].text =
+              copy.text;
+          }
+
+          return s;
+        });
+      }
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        `✅ Preço corrigido para ${moneyBR(value)}.`,
+        Markup.removeKeyboard()
+      );
+
+      return showQueueItem(
+        ctx,
+        index,
+        d.data.queuePage ||
+        0
+      );
+    }
+
     if (d.step === 'queue_edit_text') {
       const edited =
         String(text || '')
@@ -4169,6 +4404,414 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^q:coupon:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (
+      !readStore().queue
+        ?.[index]
+    ) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_coupon',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Cupom'
+    );
+
+    return ctx.reply(
+      '🎟️ Envie o cupom que você quer usar nessa oferta.\\n\\nSe não quiser cupom, escreva: Sem cupom',
+      Markup.keyboard([
+        ['Sem cupom'],
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:couponremove:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    updateStore((s) => {
+      if (
+        s.queue?.[index]
+          ?.product
+      ) {
+        delete s.queue[index]
+          .product
+          .couponCode;
+
+        delete s.queue[index]
+          .product
+          .coupon;
+
+        s.queue[index]
+          .product
+          .couponVerified =
+          false;
+      }
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Cupom removido'
+    );
+
+    const item =
+      readStore().queue
+        ?.[index];
+
+    if (item) {
+      const copy =
+        await generateOfferCopy(
+          item.product || {}
+        );
+
+      updateStore((s) => {
+        if (
+          s.queue?.[index]
+        ) {
+          s.queue[index].text =
+            copy.text;
+        }
+
+        return s;
+      });
+    }
+
+    return showQueueItem(
+      ctx,
+      index,
+      page
+    );
+  });
+
+  bot.action(/^q:refresh:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const item =
+      readStore().queue
+        ?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    await ctx.answerCbQuery(
+      'Atualizando…'
+    );
+
+    try {
+      const refreshed =
+        await refreshReviewProduct(
+          item.product || {},
+          {
+            force: true
+          }
+        );
+
+      if (
+        !refreshed.refreshed
+      ) {
+        return ctx.reply(
+          '⚠️ Não consegui confirmar um preço novo agora. Mantive o valor atual.'
+        );
+      }
+
+      const copy =
+        await generateOfferCopy(
+          refreshed.product,
+          'Dados atualizados na fila.'
+        );
+
+      updateStore((s) => {
+        if (
+          s.queue?.[index]
+        ) {
+          s.queue[index] = {
+            ...s.queue[index],
+            product:
+              refreshed.product,
+            text:
+              copy.text,
+            aiProvider:
+              copy.provider,
+            aiGenerated:
+              true
+          };
+        }
+
+        return s;
+      });
+
+      const before =
+        Number(
+          refreshed.previousPrice ||
+          0
+        );
+
+      const after =
+        Number(
+          refreshed.currentPrice ||
+          0
+        );
+
+      if (
+        refreshed.priceConflict
+      ) {
+        await ctx.reply(
+          `⚠️ As fontes da Shopee estão diferentes.\\n` +
+            `Open API: ${moneyBR(refreshed.affiliatePrice)}\\n` +
+            `Produto ao vivo: ${moneyBR(refreshed.livePrice)}\\n\\n` +
+            `Usei o preço ao vivo. Se o seu app mostrar outro valor, use ✏️ Corrigir preço.`
+        );
+      } else if (
+        before > 0 &&
+        after > 0 &&
+        Math.abs(
+          before - after
+        ) >= 0.01
+      ) {
+        await ctx.reply(
+          `✅ Preço atualizado: ${moneyBR(before)} → ${moneyBR(after)}`
+        );
+      } else {
+        await ctx.reply(
+          `✅ Preço conferido agora: ${moneyBR(after)}`
+        );
+      }
+
+      return showQueueItem(
+        ctx,
+        index,
+        page
+      );
+    } catch (e) {
+      return ctx.reply(
+        `⚠️ Não consegui atualizar: ${e.message}`
+      );
+    }
+  });
+
+  bot.action(/^q:pricefix:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    if (
+      !readStore().queue
+        ?.[index]
+    ) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_price_fix',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page
+        }
+      }
+    );
+
+    await ctx.answerCbQuery(
+      'Corrigir preço'
+    );
+
+    return ctx.reply(
+      '✏️ Digite o preço EXATO que deve aparecer nessa oferta.\\n\\nExemplo: 77,49',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
+  bot.action(/^q:regen:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const item =
+      readStore().queue
+        ?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    await ctx.answerCbQuery(
+      'Gerando…'
+    );
+
+    let product =
+      item.product || {};
+
+    if (
+      product
+        .priceManuallyConfirmed !==
+      true &&
+      [
+        'shopee',
+        'mercadolivre',
+        'shein'
+      ].includes(
+        product.platform
+      )
+    ) {
+      try {
+        const refreshed =
+          await refreshReviewProduct(
+            product,
+            {
+              force: true
+            }
+          );
+
+        if (
+          refreshed.refreshed
+        ) {
+          product =
+            refreshed.product;
+        }
+      } catch {}
+    }
+
+    const copy =
+      await generateOfferCopy(
+        product,
+        'Gerar uma nova versão do título mantendo o formato definido.'
+      );
+
+    updateStore((s) => {
+      if (
+        s.queue?.[index]
+      ) {
+        s.queue[index] = {
+          ...s.queue[index],
+          product,
+          text:
+            copy.text,
+          aiProvider:
+            copy.provider,
+          aiGenerated:
+            true
+        };
+      }
+
+      return s;
+    });
+
+    return showQueueItem(
+      ctx,
+      index,
+      page
+    );
+  });
+
+  bot.action(/^q:next:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const queue =
+      readStore().queue ||
+      [];
+
+    if (
+      queue.length < 2
+    ) {
+      return ctx.answerCbQuery(
+        'Não há próxima oferta.'
+      );
+    }
+
+    const nextIndex =
+      (
+        index + 1
+      ) %
+      queue.length;
+
+    await ctx.answerCbQuery(
+      'Próxima'
+    );
+
+    return showQueueItem(
+      ctx,
+      nextIndex,
+      Math.floor(
+        nextIndex /
+        8
+      )
+    );
+  });
+
   bot.action(/^q:edittext:(\d+):(\d+)$/, async (ctx) => {
     const index =
       Number(
@@ -4697,6 +5340,94 @@ export function startTelegram({ token, adminId }) {
     return renderApprovalCard(
       ctx,
       d.data
+    );
+  });
+
+  bot.action(/^sugsave:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    const id =
+      String(
+        ctx.match[1]
+      );
+
+    if (
+      !d ||
+      String(
+        d.data.id
+      ) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    const affiliateUrl =
+      String(
+        d.data.product
+          ?.affiliateLink ||
+        d.data.link ||
+        ''
+      ).trim();
+
+    if (!affiliateUrl) {
+      return ctx.answerCbQuery(
+        'Falta o link de afiliada.'
+      );
+    }
+
+    const item = {
+      ...d.data,
+      link:
+        affiliateUrl,
+      suggestionId:
+        d.data.suggestionId ||
+        id
+    };
+
+    if (
+      isDuplicate(
+        item.product,
+        item.link
+      )
+    ) {
+      return ctx.answerCbQuery(
+        'Produto duplicado.'
+      );
+    }
+
+    enqueue(item);
+
+    updateStore((s) => {
+      s.suggestions =
+        (
+          s.suggestions ||
+          []
+        ).filter(
+          (x) =>
+            String(x.id) !==
+            String(
+              item.suggestionId
+            )
+        );
+
+      return s;
+    });
+
+    drafts.delete(
+      ctx.from.id
+    );
+
+    await ctx.answerCbQuery(
+      'Salvo na fila!'
+    );
+
+    await ctx.reply(
+      `✅ Oferta salva na fila.\\n📦 Posição: ${readStore().queue.length}`,
+      mainMenu()
     );
   });
 
