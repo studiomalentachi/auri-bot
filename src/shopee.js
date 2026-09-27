@@ -38,7 +38,7 @@ const fields = `
 `;
 
 export async function searchShopeeOffers(keyword, { page = 1, limit = 10, sortType = 5, itemId = null, shopId = null } = {}) {
-  const query = `query ProductOffers($keyword:String,$page:Int,$limit:Int,$sortType:Int,$itemId:Int64,$shopId:Int64){
+  const query = `query ProductOffers($keyword:String,$page:Int,$limit:Int,$sortType:Int,$itemId:Int,$shopId:Int){
     productOfferV2(keyword:$keyword,page:$page,limit:$limit,sortType:$sortType,itemId:$itemId,shopId:$shopId){
       nodes { ${fields} }
       pageInfo { page limit hasNextPage }
@@ -335,9 +335,75 @@ export async function searchShopeeOffersBroad(
 }
 
 
-export async function getShopeeProduct({ itemId, shopId }) {
-  const list = await searchShopeeOffers('', { itemId: Number(itemId), shopId: Number(shopId), limit: 10, sortType: 1 });
-  return list.find(x => String(x.itemId) === String(itemId)) || list[0] || null;
+export async function getShopeeProduct({
+  itemId,
+  shopId
+}) {
+  const safeItemId =
+    Number(itemId);
+
+  const safeShopId =
+    Number(shopId);
+
+  if (
+    !Number.isSafeInteger(
+      safeItemId
+    ) ||
+    !Number.isSafeInteger(
+      safeShopId
+    ) ||
+    safeItemId <= 0 ||
+    safeShopId <= 0
+  ) {
+    throw new Error(
+      'IDs do produto Shopee inválidos.'
+    );
+  }
+
+  // A API BR documenta itemId/shopId como Int.
+  // Aqui os valores são internos e numéricos, então inserimos
+  // diretamente nos argumentos para evitar o erro "wrong type"
+  // causado por divergência de scalar nas variáveis GraphQL.
+  const query = `query {
+    productOfferV2(
+      itemId: ${safeItemId}
+      shopId: ${safeShopId}
+      page: 1
+      limit: 10
+      sortType: 1
+    ) {
+      nodes {
+        ${fields}
+      }
+      pageInfo {
+        page
+        limit
+        hasNextPage
+      }
+    }
+  }`;
+
+  const data =
+    await graphql(query);
+
+  const list =
+    (
+      data.productOfferV2
+        ?.nodes ||
+      []
+    ).map(
+      normalizeShopeeProduct
+    );
+
+  return (
+    list.find(
+      (x) =>
+        String(x.itemId) ===
+        String(itemId)
+    ) ||
+    list[0] ||
+    null
+  );
 }
 
 export async function generateShopeeShortLink(originUrl, subIds = []) {
