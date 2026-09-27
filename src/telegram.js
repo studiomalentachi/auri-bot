@@ -4,14 +4,14 @@ import crypto from 'node:crypto';
 import { Telegraf, Markup } from 'telegraf';
 import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
-import { discoverWebOffers, searchSheinOffers } from './discovery.js';
+import { discoverWebOffers, searchSheinOffers, refreshSheinProduct } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
-import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad } from './shopee.js';
+import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad, getShopeeProduct } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
 import { buildTrendDigest } from './trends.js';
-import { buildMeliAuthorizationUrl, exchangeMeliAuthorizationCode, meliOAuthStatus } from './mercadolivre.js';
+import { buildMeliAuthorizationUrl, exchangeMeliAuthorizationCode, meliOAuthStatus, getMeliProduct, getMeliProductFromUrl } from './mercadolivre.js';
 
 const drafts = new Map();
 let lastGroups = [];
@@ -1305,6 +1305,183 @@ function suggestionPosition(id) {
   };
 }
 
+async function refreshReviewProduct(
+  product,
+  {
+    force = false
+  } = {}
+) {
+  if (!product) {
+    return {
+      product,
+      refreshed: false
+    };
+  }
+
+  const last =
+    Number(
+      product._factsRefreshAt ||
+      0
+    );
+
+  if (
+    !force &&
+    last &&
+    Date.now() - last < 60000
+  ) {
+    return {
+      product,
+      refreshed: false
+    };
+  }
+
+  const platform =
+    product.platform;
+
+  let fresh =
+    null;
+
+  if (
+    platform === 'shopee' &&
+    product.itemId &&
+    product.shopId &&
+    isShopeeConfigured()
+  ) {
+    fresh =
+      await getShopeeProduct({
+        itemId:
+          product.itemId,
+        shopId:
+          product.shopId
+      });
+  } else if (
+    platform ===
+    'mercadolivre'
+  ) {
+    if (product.itemId) {
+      fresh =
+        await getMeliProduct(
+          product.itemId
+        );
+    } else {
+      const url =
+        product.canonicalUrl ||
+        product.publicLink ||
+        '';
+
+      if (url) {
+        fresh =
+          await getMeliProductFromUrl(
+            url
+          );
+      }
+    }
+  } else if (
+    platform === 'shein'
+  ) {
+    const url =
+      product.canonicalUrl ||
+      product.publicLink ||
+      '';
+
+    if (url) {
+      fresh =
+        await refreshSheinProduct(
+          url
+        );
+    }
+  }
+
+  if (
+    !fresh ||
+    Number(
+      fresh.price || 0
+    ) <= 0
+  ) {
+    return {
+      product,
+      refreshed: false
+    };
+  }
+
+  const merged = {
+    ...product,
+    ...fresh,
+
+    // Preserva o link de afiliada que já estava no item.
+    affiliateLink:
+      product.affiliateLink ||
+      fresh.affiliateLink ||
+      null,
+
+    affiliateLinkVerified:
+      product.affiliateLinkVerified === true ||
+      fresh.affiliateLinkVerified === true,
+
+    couponCode:
+      product.couponCode,
+    coupon:
+      product.coupon,
+    couponVerified:
+      product.couponVerified,
+
+    _factsRefreshAt:
+      Date.now()
+  };
+
+  return {
+    product: merged,
+    refreshed: true,
+    previousPrice:
+      Number(
+        product.price || 0
+      ),
+    currentPrice:
+      Number(
+        merged.price || 0
+      )
+  };
+}
+
+function saveRefreshedSuggestion(
+  suggestionId,
+  product,
+  text = null
+) {
+  updateStore((s) => {
+    const index =
+      (
+        s.suggestions ||
+        []
+      ).findIndex(
+        (x) =>
+          String(x.id) ===
+          String(
+            suggestionId
+          )
+      );
+
+    if (index >= 0) {
+      s.suggestions[index] = {
+        ...s.suggestions[index],
+        ...(text !== null
+          ? { text }
+          : {}),
+        product: {
+          ...(
+            s.suggestions[index]
+              .product ||
+            {}
+          ),
+          ...product
+        }
+      };
+    }
+
+    return s;
+  });
+}
+
 function saveSuggestionDraft(d) {
   if (
     !d ||
@@ -1344,6 +1521,32 @@ async function renderApprovalCard(ctx, item) {
       mainMenu()
     );
   }
+
+  try {
+    const refreshed =
+      await refreshReviewProduct(
+        item.product || {}
+      );
+
+    if (
+      refreshed?.product
+    ) {
+      item = {
+        ...item,
+        product:
+          refreshed.product
+      };
+
+      if (
+        refreshed.refreshed
+      ) {
+        saveRefreshedSuggestion(
+          item.id,
+          refreshed.product
+        );
+      }
+    }
+  } catch {}
 
   const product = item.product || {};
   const publicLink =
@@ -1554,9 +1757,16 @@ async function renderApprovalCard(ctx, item) {
 
   rows.push([
     Markup.button.callback(
+      '🔄 Atualizar preço',
+      `refreshfacts:${id}`
+    ),
+    Markup.button.callback(
       '✨ Outro texto',
       `regen:${id}`
-    ),
+    )
+  ]);
+
+  rows.push([
     Markup.button.callback(
       '❌ Ignorar',
       `ignore:${id}`
@@ -4691,6 +4901,114 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^refreshfacts:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    const id =
+      ctx.match[1];
+
+    if (
+      !d ||
+      d.data.id !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Prévia expirou.'
+      );
+    }
+
+    await ctx.answerCbQuery(
+      'Atualizando…'
+    );
+
+    try {
+      const refreshed =
+        await refreshReviewProduct(
+          d.data.product || {},
+          {
+            force: true
+          }
+        );
+
+      if (
+        !refreshed.refreshed
+      ) {
+        return ctx.reply(
+          '⚠️ Não consegui confirmar um preço novo agora. Mantive o valor atual para não inventar.'
+        );
+      }
+
+      d.data.product =
+        refreshed.product;
+
+      const copy =
+        await generateOfferCopy(
+          d.data.product,
+          'Dados atualizados agora.'
+        );
+
+      d.data.text =
+        copy.text;
+
+      d.data.aiProvider =
+        copy.provider;
+
+      d.data.aiGenerated =
+        true;
+
+      saveRefreshedSuggestion(
+        d.data.suggestionId ||
+        d.data.id,
+        d.data.product,
+        d.data.text
+      );
+
+      drafts.set(
+        ctx.from.id,
+        d
+      );
+
+      const before =
+        Number(
+          refreshed.previousPrice ||
+          0
+        );
+
+      const after =
+        Number(
+          refreshed.currentPrice ||
+          0
+        );
+
+      if (
+        before > 0 &&
+        after > 0 &&
+        Math.abs(
+          before - after
+        ) >= 0.01
+      ) {
+        await ctx.reply(
+          `✅ Preço atualizado: ${moneyBR(before)} → ${moneyBR(after)}`
+        );
+      } else {
+        await ctx.reply(
+          `✅ Dados atualizados. Preço confirmado agora: ${moneyBR(after)}`
+        );
+      }
+
+      return renderApprovalCard(
+        ctx,
+        d.data
+      );
+    } catch (e) {
+      return ctx.reply(
+        `⚠️ Não consegui atualizar agora: ${e.message}`
+      );
+    }
+  });
+
   bot.action(/^regen:(.+)$/, async (ctx) => {
     const d = drafts.get(ctx.from.id);
     const id = ctx.match[1];
@@ -4699,17 +5017,68 @@ export function startTelegram({ token, adminId }) {
       return ctx.answerCbQuery('Prévia expirou.');
     }
 
-    await ctx.answerCbQuery('Gerando…');
-
-    const previousText = d.data.text || '';
-    const copy = await generateOfferCopy(
-      d.data.product || {},
-      regenerateInstruction(d, previousText)
+    await ctx.answerCbQuery(
+      'Atualizando e gerando…'
     );
 
-    d.data.text = copy.text;
-    d.data.aiProvider = copy.provider;
-    d.data.aiGenerated = true;
+    const platform =
+      d.data.product?.platform;
+
+    if (
+      [
+        'shopee',
+        'mercadolivre',
+        'shein'
+      ].includes(
+        platform
+      )
+    ) {
+      try {
+        const refreshed =
+          await refreshReviewProduct(
+            d.data.product || {},
+            {
+              force: true
+            }
+          );
+
+        if (
+          !refreshed.refreshed
+        ) {
+          return ctx.reply(
+            '⚠️ Não consegui confirmar o preço atual agora. Não gerei outro texto para evitar um valor possivelmente desatualizado.'
+          );
+        }
+
+        d.data.product =
+          refreshed.product;
+      } catch (e) {
+        return ctx.reply(
+          `⚠️ Não consegui atualizar o preço agora: ${e.message}`
+        );
+      }
+    }
+
+    const previousText =
+      d.data.text || '';
+
+    const copy =
+      await generateOfferCopy(
+        d.data.product || {},
+        regenerateInstruction(
+          d,
+          previousText
+        )
+      );
+
+    d.data.text =
+      copy.text;
+
+    d.data.aiProvider =
+      copy.provider;
+
+    d.data.aiGenerated =
+      true;
 
     saveSuggestionDraft(d);
 
