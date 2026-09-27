@@ -3,6 +3,7 @@ import { generateOfferCopy } from './ai.js';
 import { discoverWebOffers, refreshSheinProduct } from './discovery.js';
 import {
   getShopeeProduct,
+  getShopeeLiveProduct,
   generateShopeeShortLink,
   isShopeeConfigured
 } from './shopee.js';
@@ -256,6 +257,32 @@ async function refreshBeforeSend(
   const platform =
     item.product?.platform;
 
+  // Oferta aprovada manualmente com preço corrigido por você:
+  // não sobrescreve esse preço com uma fonte automática depois.
+  if (
+    !item.autoQueued &&
+    item.product
+      ?.priceManuallyConfirmed ===
+      true
+  ) {
+    const copy =
+      await generateOfferCopy(
+        item.product,
+        'Preço confirmado manualmente pela usuária.'
+      );
+
+    item.text =
+      copy.text;
+
+    return {
+      item,
+      verified:
+        true,
+      manual:
+        true
+    };
+  }
+
   let fresh =
     null;
 
@@ -274,41 +301,137 @@ async function refreshBeforeSend(
         );
       }
 
-      fresh =
-        await getShopeeProduct({
-          itemId:
-            item.product
-              .itemId,
-          shopId:
-            item.product
-              .shopId
-        });
+      const [
+        affiliateResult,
+        liveResult
+      ] =
+        await Promise.allSettled([
+          getShopeeProduct({
+            itemId:
+              item.product
+                .itemId,
+            shopId:
+              item.product
+                .shopId
+          }),
+          getShopeeLiveProduct({
+            itemId:
+              item.product
+                .itemId,
+            shopId:
+              item.product
+                .shopId
+          })
+        ]);
 
-      if (!fresh) {
+      const affiliateFresh =
+        affiliateResult.status ===
+          'fulfilled'
+          ? affiliateResult.value
+          : null;
+
+      const liveFresh =
+        liveResult.status ===
+          'fulfilled'
+          ? liveResult.value
+          : null;
+
+      if (
+        !affiliateFresh &&
+        !liveFresh
+      ) {
         throw new Error(
-          'Produto Shopee não encontrado na revalidação.'
+          'Shopee não confirmou o produto em nenhuma das duas fontes.'
         );
       }
 
-      fresh.affiliateLink =
-        await generateShopeeShortLink(
-          fresh.productLink,
-          [
-            'whatsapp',
-            'auri'
-          ]
-        );
+      fresh = {
+        ...(
+          affiliateFresh ||
+          {}
+        ),
+        ...(
+          liveFresh ||
+          {}
+        ),
+        productLink:
+          affiliateFresh
+            ?.productLink ||
+          item.product
+            ?.productLink ||
+          item.product
+            ?.canonicalUrl ||
+          '',
+        affiliateLink:
+          affiliateFresh
+            ?.affiliateLink ||
+          item.product
+            ?.affiliateLink ||
+          null
+      };
+
+      if (
+        affiliateFresh
+          ?.productLink
+      ) {
+        fresh.affiliateLink =
+          await generateShopeeShortLink(
+            affiliateFresh
+              .productLink,
+            [
+              'whatsapp',
+              'auri'
+            ]
+          );
+      }
 
       if (
         item.autoQueued &&
-        config.autoQueueStrictValidation &&
-        !stableShopeePrice(
-          fresh
-        )
+        config
+          .autoQueueStrictValidation
       ) {
-        throw new Error(
-          'Produto Shopee tem variações com preços diferentes.'
-        );
+        if (!liveFresh) {
+          throw new Error(
+            'Auto fila bloqueada: preço ao vivo da Shopee não pôde ser confirmado.'
+          );
+        }
+
+        if (
+          !stableShopeePrice(
+            liveFresh
+          )
+        ) {
+          throw new Error(
+            'Auto fila bloqueada: produto tem variações com preços diferentes.'
+          );
+        }
+
+        const affiliatePrice =
+          Number(
+            affiliateFresh
+              ?.price ||
+            0
+          );
+
+        const livePrice =
+          Number(
+            liveFresh
+              ?.price ||
+            0
+          );
+
+        if (
+          affiliatePrice <= 0 ||
+          livePrice <= 0 ||
+          Math.abs(
+            affiliatePrice -
+            livePrice
+          ) >= 0.01
+        ) {
+          throw new Error(
+            'Auto fila bloqueada: as fontes da Shopee estão mostrando preços diferentes.'
+          );
+        }
       }
     } else if (
       platform ===

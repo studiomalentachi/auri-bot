@@ -6,7 +6,7 @@ import { availableAIProviders, generateOfferCopy } from './ai.js';
 import { config } from './config.js';
 import { discoverWebOffers, searchSheinOffers, refreshSheinProduct } from './discovery.js';
 import { importProductFromUrl, searchMarketplace } from './marketplaces.js';
-import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad, getShopeeProduct } from './shopee.js';
+import { getShopeeConversions, isShopeeConfigured, searchShopeeOffersBroad, getShopeeProduct, getShopeeLiveProduct } from './shopee.js';
 import { enqueue, isDuplicate, readStore, removeFromQueue, setTargetGroups, updateStore } from './store.js';
 import { isWhatsAppConnected, listWhatsAppGroups, requestWhatsAppPairingCode } from './whatsapp.js';
 import { sendOneNow } from './scheduler.js';
@@ -1314,24 +1314,45 @@ async function refreshReviewProduct(
   if (!product) {
     return {
       product,
-      refreshed: false
+      refreshed:
+        false
+    };
+  }
+
+  // Se você corrigiu o preço manualmente, abrir o card de novo
+  // não deve sobrescrever o valor que você acabou de confirmar.
+  if (
+    product
+      .priceManuallyConfirmed ===
+      true &&
+    !force
+  ) {
+    return {
+      product,
+      refreshed:
+        false,
+      manual:
+        true
     };
   }
 
   const last =
     Number(
-      product._factsRefreshAt ||
+      product
+        ._factsRefreshAt ||
       0
     );
 
   if (
     !force &&
     last &&
-    Date.now() - last < 60000
+    Date.now() - last <
+      60000
   ) {
     return {
       product,
-      refreshed: false
+      refreshed:
+        false
     };
   }
 
@@ -1341,24 +1362,86 @@ async function refreshReviewProduct(
   let fresh =
     null;
 
+  let affiliateFresh =
+    null;
+
+  let liveFresh =
+    null;
+
   if (
-    platform === 'shopee' &&
+    platform ===
+      'shopee' &&
     product.itemId &&
     product.shopId &&
     isShopeeConfigured()
   ) {
-    fresh =
-      await getShopeeProduct({
-        itemId:
-          product.itemId,
-        shopId:
-          product.shopId
-      });
+    const [
+      affiliateResult,
+      liveResult
+    ] =
+      await Promise.allSettled([
+        getShopeeProduct({
+          itemId:
+            product.itemId,
+          shopId:
+            product.shopId
+        }),
+        getShopeeLiveProduct({
+          itemId:
+            product.itemId,
+          shopId:
+            product.shopId
+        })
+      ]);
+
+    affiliateFresh =
+      affiliateResult.status ===
+        'fulfilled'
+        ? affiliateResult.value
+        : null;
+
+    liveFresh =
+      liveResult.status ===
+        'fulfilled'
+        ? liveResult.value
+        : null;
+
+    // Para preço/desconto/nota, a tela pública ao vivo tem prioridade.
+    // A Open API continua sendo usada para dados de afiliada.
+    fresh = {
+      ...(
+        affiliateFresh ||
+        {}
+      ),
+      ...(
+        liveFresh ||
+        {}
+      ),
+      productLink:
+        affiliateFresh
+          ?.productLink ||
+        product.productLink ||
+        product.canonicalUrl ||
+        '',
+      canonicalUrl:
+        affiliateFresh
+          ?.canonicalUrl ||
+        product.canonicalUrl ||
+        product.productLink ||
+        '',
+      affiliateLink:
+        product.affiliateLink ||
+        affiliateFresh
+          ?.affiliateLink ||
+        null
+    };
   } else if (
     platform ===
-    'mercadolivre'
+      'mercadolivre'
   ) {
-    if (product.itemId) {
+    if (
+      product.itemId
+    ) {
       fresh =
         await getMeliProduct(
           product.itemId
@@ -1377,7 +1460,8 @@ async function refreshReviewProduct(
       }
     }
   } else if (
-    platform === 'shein'
+    platform ===
+      'shein'
   ) {
     const url =
       product.canonicalUrl ||
@@ -1400,23 +1484,49 @@ async function refreshReviewProduct(
   ) {
     return {
       product,
-      refreshed: false
+      refreshed:
+        false
     };
   }
+
+  const affiliatePrice =
+    Number(
+      affiliateFresh
+        ?.price ||
+      0
+    );
+
+  const livePrice =
+    Number(
+      liveFresh
+        ?.price ||
+      0
+    );
+
+  const priceConflict =
+    affiliatePrice > 0 &&
+    livePrice > 0 &&
+    Math.abs(
+      affiliatePrice -
+      livePrice
+    ) >= 0.01;
 
   const merged = {
     ...product,
     ...fresh,
 
-    // Preserva o link de afiliada que já estava no item.
     affiliateLink:
       product.affiliateLink ||
       fresh.affiliateLink ||
       null,
 
     affiliateLinkVerified:
-      product.affiliateLinkVerified === true ||
-      fresh.affiliateLinkVerified === true,
+      product
+        .affiliateLinkVerified ===
+        true ||
+      fresh
+        .affiliateLinkVerified ===
+        true,
 
     couponCode:
       product.couponCode,
@@ -1425,21 +1535,36 @@ async function refreshReviewProduct(
     couponVerified:
       product.couponVerified,
 
+    // Uma atualização automática explícita volta a usar a fonte ao vivo.
+    priceManuallyConfirmed:
+      false,
+    manualPriceAt:
+      null,
+
     _factsRefreshAt:
       Date.now()
   };
 
   return {
-    product: merged,
-    refreshed: true,
+    product:
+      merged,
+    refreshed:
+      true,
     previousPrice:
       Number(
-        product.price || 0
+        product.price ||
+        0
       ),
     currentPrice:
       Number(
-        merged.price || 0
-      )
+        merged.price ||
+        0
+      ),
+    affiliatePrice,
+    livePrice,
+    priceConflict,
+    usedLivePrice:
+      livePrice > 0
   };
 }
 
@@ -1761,12 +1886,16 @@ async function renderApprovalCard(ctx, item) {
       `refreshfacts:${id}`
     ),
     Markup.button.callback(
-      '✨ Outro texto',
-      `regen:${id}`
+      '✏️ Corrigir preço',
+      `pricefix:${id}`
     )
   ]);
 
   rows.push([
+    Markup.button.callback(
+      '✨ Outro texto',
+      `regen:${id}`
+    ),
     Markup.button.callback(
       '❌ Ignorar',
       `ignore:${id}`
@@ -3214,6 +3343,111 @@ export function startTelegram({ token, adminId }) {
           (position - 1) /
           8
         )
+      );
+    }
+
+    if (
+      d.step ===
+      'suggestion_price_fix'
+    ) {
+      const value =
+        parseMoneyBR(
+          text
+        );
+
+      if (!value) {
+        return ctx.reply(
+          '⚠️ Não consegui entender o preço. Digite somente o valor, por exemplo: 77,49'
+        );
+      }
+
+      const product =
+        d.data.product ||
+        {};
+
+      product.price =
+        value;
+
+      product.priceMin =
+        value;
+
+      product.priceMax =
+        value;
+
+      product
+        .priceManuallyConfirmed =
+        true;
+
+      product.manualPriceAt =
+        new Date()
+          .toISOString();
+
+      // Se houver um preço anterior real, recalcula o desconto.
+      // Caso contrário, remove o desconto automático para não mandar
+      // uma porcentagem incompatível com o preço que você confirmou.
+      const original =
+        Number(
+          product
+            .originalPrice ||
+          0
+        );
+
+      if (
+        original > value
+      ) {
+        product.discountPct =
+          (
+            (
+              original -
+              value
+            ) /
+            original
+          ) *
+          100;
+      } else {
+        product.discountPct =
+          0;
+      }
+
+      d.data.product =
+        product;
+
+      const copy =
+        await generateOfferCopy(
+          product,
+          'Preço confirmado manualmente pela usuária.'
+        );
+
+      d.data.text =
+        copy.text;
+
+      d.data.aiProvider =
+        copy.provider;
+
+      d.data.aiGenerated =
+        true;
+
+      d.step =
+        'suggestion_review';
+
+      saveSuggestionDraft(
+        d
+      );
+
+      drafts.set(
+        ctx.from.id,
+        d
+      );
+
+      await ctx.reply(
+        `✅ Preço corrigido para ${moneyBR(value)}.\\n\\n` +
+          'O texto foi recriado com esse valor.',
+        Markup.removeKeyboard()
+      );
+
+      return renderApprovalCard(
+        ctx,
+        d.data
       );
     }
 
@@ -4901,6 +5135,46 @@ export function startTelegram({ token, adminId }) {
     );
   });
 
+  bot.action(/^pricefix:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    const id =
+      ctx.match[1];
+
+    if (
+      !d ||
+      d.data.id !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Prévia expirou.'
+      );
+    }
+
+    d.step =
+      'suggestion_price_fix';
+
+    drafts.set(
+      ctx.from.id,
+      d
+    );
+
+    await ctx.answerCbQuery(
+      'Corrigir preço'
+    );
+
+    return ctx.reply(
+      '✏️ Digite o preço EXATO que está aparecendo para você no produto.\n\n' +
+        'Exemplo: 77,49\n\n' +
+        'A Auri vai usar esse valor no texto e não vai sobrescrevê-lo ao reabrir esta sugestão.',
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
+    );
+  });
+
   bot.action(/^refreshfacts:(.+)$/, async (ctx) => {
     const d =
       drafts.get(
@@ -4983,6 +5257,15 @@ export function startTelegram({ token, adminId }) {
         );
 
       if (
+        refreshed.priceConflict
+      ) {
+        await ctx.reply(
+          `⚠️ As duas fontes da Shopee estão mostrando valores diferentes.\n\n` +
+            `Open API de afiliados: ${moneyBR(refreshed.affiliatePrice)}\n` +
+            `Produto ao vivo: ${moneyBR(refreshed.livePrice)}\n\n` +
+            `Usei o valor do produto ao vivo no texto. Se o seu app ainda mostrar outro valor, toque em ✏️ Corrigir preço.`
+        );
+      } else if (
         before > 0 &&
         after > 0 &&
         Math.abs(
@@ -4994,7 +5277,7 @@ export function startTelegram({ token, adminId }) {
         );
       } else {
         await ctx.reply(
-          `✅ Dados atualizados. Preço confirmado agora: ${moneyBR(after)}`
+          `✅ Dados consultados novamente. Preço encontrado agora: ${moneyBR(after)}`
         );
       }
 
@@ -5024,7 +5307,13 @@ export function startTelegram({ token, adminId }) {
     const platform =
       d.data.product?.platform;
 
+    const manualPrice =
+      d.data.product
+        ?.priceManuallyConfirmed ===
+      true;
+
     if (
+      !manualPrice &&
       [
         'shopee',
         'mercadolivre',

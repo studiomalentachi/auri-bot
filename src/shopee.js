@@ -406,6 +406,237 @@ export async function getShopeeProduct({
   );
 }
 
+function shopeeRawMoney(value) {
+  const n =
+    Number(
+      value || 0
+    );
+
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 0;
+  }
+
+  // O endpoint público da Shopee costuma retornar moeda em 1e5.
+  return n >= 100000
+    ? n / 100000
+    : n;
+}
+
+export async function getShopeeLiveProduct({
+  itemId,
+  shopId
+}) {
+  const safeItemId =
+    Number(itemId);
+
+  const safeShopId =
+    Number(shopId);
+
+  if (
+    !Number.isSafeInteger(
+      safeItemId
+    ) ||
+    !Number.isSafeInteger(
+      safeShopId
+    ) ||
+    safeItemId <= 0 ||
+    safeShopId <= 0
+  ) {
+    throw new Error(
+      'IDs Shopee inválidos.'
+    );
+  }
+
+  const url =
+    new URL(
+      'https://shopee.com.br/api/v4/item/get'
+    );
+
+  url.searchParams.set(
+    'itemid',
+    String(safeItemId)
+  );
+
+  url.searchParams.set(
+    'shopid',
+    String(safeShopId)
+  );
+
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      12000
+    );
+
+  try {
+    const res =
+      await fetch(
+        url,
+        {
+          method:
+            'GET',
+          redirect:
+            'follow',
+          signal:
+            controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36',
+            'Accept':
+              'application/json,text/plain,*/*',
+            'Accept-Language':
+              'pt-BR,pt;q=0.9',
+            'Referer':
+              'https://shopee.com.br/'
+          }
+        }
+      );
+
+    const json =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
+
+    if (!res.ok) {
+      throw new Error(
+        `Shopee preço ao vivo HTTP ${res.status}`
+      );
+    }
+
+    const data =
+      json?.data?.item_basic ||
+      json?.data ||
+      null;
+
+    if (!data) {
+      throw new Error(
+        'Shopee não devolveu os dados do produto ao vivo.'
+      );
+    }
+
+    const priceMin =
+      shopeeRawMoney(
+        data.price_min ||
+        data.price
+      );
+
+    const priceMax =
+      shopeeRawMoney(
+        data.price_max ||
+        data.price ||
+        data.price_min
+      );
+
+    const price =
+      shopeeRawMoney(
+        data.price ||
+        data.price_min
+      ) ||
+      priceMin;
+
+    const originalPrice =
+      shopeeRawMoney(
+        data.price_before_discount ||
+        data.price_min_before_discount ||
+        0
+      );
+
+    const discountPct =
+      Number(
+        data.raw_discount ??
+        data.show_discount ??
+        String(
+          data.discount ||
+          ''
+        )
+          .replace(
+            /[^0-9.,]/g,
+            ''
+          )
+          .replace(
+            ',',
+            '.'
+          ) ||
+        0
+      );
+
+    const rating =
+      Number(
+        data.item_rating
+          ?.rating_star ||
+        data.rating_star ||
+        0
+      );
+
+    const sales =
+      Number(
+        data.historical_sold ||
+        data.sold ||
+        0
+      );
+
+    return {
+      platform:
+        'shopee',
+      itemId:
+        String(
+          data.itemid ||
+          safeItemId
+        ),
+      shopId:
+        String(
+          data.shopid ||
+          safeShopId
+        ),
+      name:
+        data.name ||
+        '',
+      price,
+      priceMin,
+      priceMax,
+      originalPrice:
+        originalPrice >
+          price
+          ? originalPrice
+          : 0,
+      discountPct:
+        Number.isFinite(
+          discountPct
+        )
+          ? discountPct
+          : 0,
+      rating:
+        Number.isFinite(
+          rating
+        )
+          ? rating
+          : 0,
+      sales:
+        Number.isFinite(
+          sales
+        )
+          ? sales
+          : 0,
+      livePriceSource:
+        'Shopee produto ao vivo'
+    };
+  } finally {
+    clearTimeout(
+      timer
+    );
+  }
+}
+
+
 export async function generateShopeeShortLink(originUrl, subIds = []) {
   const query = `mutation Short($input:ShortLinkInput!){ generateShortLink(input:$input){ shortLink } }`;
   const data = await graphql(query, { input: { originUrl, subIds: subIds.filter(Boolean).slice(0, 5) } });
