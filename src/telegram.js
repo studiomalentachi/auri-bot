@@ -2882,8 +2882,7 @@ export function startTelegram({ token, adminId }) {
         );
 
         return ctx.reply(
-          `⚠️ ${e.message}\n\n` +
-            'Se for Shopee, envie novamente o link de afiliada gerado diretamente na página desse produto.',
+          `⚠️ ${e.message}`,
           mainMenu()
         );
       }

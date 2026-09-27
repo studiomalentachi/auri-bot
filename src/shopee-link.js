@@ -2,7 +2,8 @@ import {
   getShopeeProduct,
   getShopeeLiveProduct,
   isShopeeConfigured,
-  parseShopeeIds
+  parseShopeeIds,
+  searchShopeeOffers
 } from './shopee.js';
 
 function decodeMany(value) {
@@ -184,6 +185,406 @@ function idsFromLooseText(
     if (ids) {
       return ids;
     }
+  }
+
+  return null;
+}
+
+
+function decodeHtmlEntities(value) {
+  return decodeMany(
+    String(value || '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&#x27;/gi, "'")
+      .replace(/&#34;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+  );
+}
+
+function metaContent(html, key) {
+  const text =
+    String(html || '');
+
+  const escaped =
+    String(key)
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const patterns = [
+    new RegExp(
+      `<meta[^>]+(?:property|name|itemprop)=["']${escaped}["'][^>]+content=["']([^"']+)["']`,
+      'i'
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name|itemprop)=["']${escaped}["']`,
+      'i'
+    )
+  ];
+
+  for (
+    const pattern of
+    patterns
+  ) {
+    const m =
+      text.match(
+        pattern
+      );
+
+    if (m?.[1]) {
+      return decodeHtmlEntities(
+        m[1]
+      ).trim();
+    }
+  }
+
+  return '';
+}
+
+function titleFromHtml(html) {
+  const og =
+    metaContent(
+      html,
+      'og:title'
+    ) ||
+    metaContent(
+      html,
+      'twitter:title'
+    );
+
+  if (og) {
+    return cleanLandingTitle(
+      og
+    );
+  }
+
+  const m =
+    String(html || '')
+      .match(
+        /<title[^>]*>([\s\S]*?)<\/title>/i
+      );
+
+  return cleanLandingTitle(
+    decodeHtmlEntities(
+      m?.[1] ||
+      ''
+    )
+  );
+}
+
+function imageFromHtml(html) {
+  return (
+    metaContent(
+      html,
+      'og:image'
+    ) ||
+    metaContent(
+      html,
+      'twitter:image'
+    ) ||
+    ''
+  );
+}
+
+function priceFromHtml(html) {
+  const direct = [
+    metaContent(
+      html,
+      'product:price:amount'
+    ),
+    metaContent(
+      html,
+      'og:price:amount'
+    ),
+    metaContent(
+      html,
+      'price'
+    )
+  ];
+
+  for (
+    const value of direct
+  ) {
+    const n =
+      Number(
+        String(value || '')
+          .replace(
+            /[^0-9.,]/g,
+            ''
+          )
+          .replace(
+            /\./g,
+            ''
+          )
+          .replace(
+            ',',
+            '.'
+          )
+      );
+
+    if (
+      Number.isFinite(n) &&
+      n > 0
+    ) {
+      return n;
+    }
+  }
+
+  const text =
+    decodeHtmlEntities(
+      html
+    );
+
+  const patterns = [
+    /"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /"price_min"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /"priceMin"\s*:\s*([0-9]+(?:\.[0-9]+)?)/i
+  ];
+
+  for (
+    const pattern of
+    patterns
+  ) {
+    const m =
+      text.match(
+        pattern
+      );
+
+    if (m?.[1]) {
+      let n =
+        Number(
+          m[1]
+        );
+
+      if (
+        n >= 100000
+      ) {
+        n =
+          n / 100000;
+      }
+
+      if (
+        Number.isFinite(n) &&
+        n > 0
+      ) {
+        return n;
+      }
+    }
+  }
+
+  return 0;
+}
+
+function cleanLandingTitle(value) {
+  return String(value || '')
+    .replace(
+      /\s*[|•-]\s*Shopee(?:\s+Brasil)?[\s\S]*$/i,
+      ''
+    )
+    .replace(
+      /^\s*Compre\s+/i,
+      ''
+    )
+    .replace(
+      /\s+/g,
+      ' '
+    )
+    .trim();
+}
+
+function normalizeWords(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(
+      /[\u0300-\u036f]/g,
+      ''
+    )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9\s]/g,
+      ' '
+    )
+    .split(/\s+/)
+    .filter(
+      (x) =>
+        x.length >= 2
+    );
+}
+
+function titleSimilarity(a, b) {
+  const A =
+    new Set(
+      normalizeWords(
+        a
+      )
+    );
+
+  const B =
+    new Set(
+      normalizeWords(
+        b
+      )
+    );
+
+  if (
+    !A.size ||
+    !B.size
+  ) {
+    return 0;
+  }
+
+  let common =
+    0;
+
+  for (
+    const token of A
+  ) {
+    if (
+      B.has(token)
+    ) {
+      common += 1;
+    }
+  }
+
+  return common /
+    Math.max(
+      A.size,
+      B.size
+    );
+}
+
+function searchTermsFromTitle(title) {
+  const words =
+    String(title || '')
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim()
+      .split(' ')
+      .filter(Boolean);
+
+  const terms = [
+    String(title || '')
+      .trim(),
+    words
+      .slice(0, 12)
+      .join(' '),
+    words
+      .slice(0, 8)
+      .join(' '),
+    words
+      .slice(0, 6)
+      .join(' ')
+  ]
+    .filter(Boolean);
+
+  return [
+    ...new Set(
+      terms
+    )
+  ];
+}
+
+async function findShopeeByLandingTitle(
+  title
+) {
+  const cleanTitle =
+    cleanLandingTitle(
+      title
+    );
+
+  if (
+    !cleanTitle
+  ) {
+    return null;
+  }
+
+  let best =
+    null;
+
+  let bestScore =
+    0;
+
+  for (
+    const term of
+    searchTermsFromTitle(
+      cleanTitle
+    )
+  ) {
+    for (
+      let page = 1;
+      page <= 3;
+      page += 1
+    ) {
+      let rows =
+        [];
+
+      try {
+        rows =
+          await searchShopeeOffers(
+            term,
+            {
+              page,
+              limit:
+                20,
+              sortType:
+                5
+            }
+          );
+      } catch {
+        rows =
+          [];
+      }
+
+      for (
+        const product of
+        rows
+      ) {
+        const score =
+          titleSimilarity(
+            cleanTitle,
+            product.name
+          );
+
+        if (
+          score >
+          bestScore
+        ) {
+          bestScore =
+            score;
+
+          best =
+            product;
+        }
+      }
+
+      if (
+        best &&
+        bestScore >=
+          0.82
+      ) {
+        return {
+          product:
+            best,
+          score:
+            bestScore
+        };
+      }
+    }
+  }
+
+  if (
+    best &&
+    bestScore >=
+      0.5
+  ) {
+    return {
+      product:
+        best,
+      score:
+        bestScore
+    };
   }
 
   return null;
@@ -432,11 +833,6 @@ export async function importShopeeAffiliateLink(
     );
   }
 
-  let ids =
-    idsFromLooseText(
-      exactLink
-    );
-
   let landing = {
     finalUrl:
       exactLink,
@@ -444,82 +840,245 @@ export async function importShopeeAffiliateLink(
       ''
   };
 
-  if (!ids) {
-    try {
-      landing =
-        await fetchAffiliateLanding(
-          exactLink
-        );
-    } catch {}
-
-    ids =
-      idsFromLooseText(
-        landing.finalUrl
-      ) ||
-      idsFromLooseText(
-        landing.body
+  try {
+    landing =
+      await fetchAffiliateLanding(
+        exactLink
       );
-  }
+  } catch {}
 
-  if (!ids) {
-    throw new Error(
-      'Não consegui descobrir qual produto existe dentro desse link da Shopee. Gere o link de afiliada novamente a partir da página do produto e envie aqui.'
-    );
-  }
-
-  const [
-    affiliateResult,
-    liveResult
-  ] =
-    await Promise.allSettled([
-      getShopeeProduct(
-        ids
-      ),
-      getShopeeLiveProduct(
-        ids
-      )
-    ]);
-
-  const affiliate =
-    affiliateResult.status ===
-      'fulfilled'
-      ? affiliateResult.value
-      : null;
-
-  const live =
-    liveResult.status ===
-      'fulfilled'
-      ? liveResult.value
-      : null;
-
-  if (
-    !affiliate &&
-    !live
-  ) {
-    throw new Error(
-      'Encontrei o produto dentro do link, mas a Shopee não devolveu os dados dele agora. Tente novamente em alguns minutos.'
-    );
-  }
-
-  const product =
-    mergeShopeeFacts(
-      affiliate,
-      live,
-      exactLink,
+  let ids =
+    idsFromLooseText(
+      exactLink
+    ) ||
+    idsFromLooseText(
       landing.finalUrl
+    ) ||
+    idsFromLooseText(
+      landing.body
     );
 
-  if (
-    !product.name ||
-    Number(
-      product.price ||
-      0
-    ) <= 0
-  ) {
-    throw new Error(
-      'Encontrei o produto, mas não consegui confirmar nome e preço automaticamente.'
+  const landingTitle =
+    titleFromHtml(
+      landing.body
     );
+
+  const landingImage =
+    imageFromHtml(
+      landing.body
+    );
+
+  const landingPrice =
+    priceFromHtml(
+      landing.body
+    );
+
+  let matchedByTitle =
+    null;
+
+  // Muitos links s.shopee.com.br não expõem itemId/shopId no redirecionamento.
+  // Nesse caso, usamos o mesmo título que aparece no preview do Telegram
+  // para localizar o produto na Shopee Open API.
+  if (
+    !ids &&
+    landingTitle
+  ) {
+    matchedByTitle =
+      await findShopeeByLandingTitle(
+        landingTitle
+      );
+
+    if (
+      matchedByTitle
+        ?.product
+    ) {
+      ids = {
+        itemId:
+          matchedByTitle
+            .product
+            .itemId,
+        shopId:
+          matchedByTitle
+            .product
+            .shopId
+      };
+    }
   }
 
-  return product;
+  let affiliate =
+    matchedByTitle
+      ?.product ||
+    null;
+
+  let live =
+    null;
+
+  if (ids) {
+    const [
+      affiliateResult,
+      liveResult
+    ] =
+      await Promise.allSettled([
+        affiliate ||
+        getShopeeProduct(
+          ids
+        ),
+        getShopeeLiveProduct(
+          ids
+        )
+      ]);
+
+    affiliate =
+      affiliateResult.status ===
+        'fulfilled'
+        ? affiliateResult.value
+        : affiliate;
+
+    live =
+      liveResult.status ===
+        'fulfilled'
+        ? liveResult.value
+        : null;
+  }
+
+  if (
+    affiliate ||
+    live
+  ) {
+    const product =
+      mergeShopeeFacts(
+        affiliate,
+        live,
+        exactLink,
+        landing.finalUrl
+      );
+
+    if (
+      !product.imageUrl &&
+      landingImage
+    ) {
+      product.imageUrl =
+        landingImage;
+    }
+
+    if (
+      Number(
+        product.price ||
+        0
+      ) <= 0 &&
+      landingPrice > 0
+    ) {
+      product.price =
+        landingPrice;
+
+      product.priceMin =
+        landingPrice;
+
+      product.priceMax =
+        landingPrice;
+    }
+
+    if (
+      landingTitle &&
+      (
+        !product.name ||
+        String(
+          product.name
+        ).length < 5
+      )
+    ) {
+      product.name =
+        landingTitle;
+    }
+
+    product.affiliateLink =
+      exactLink;
+
+    product.affiliateLinkVerified =
+      true;
+
+    product.suppliedAffiliateLink =
+      true;
+
+    product.resolutionMethod =
+      ids
+        ? (
+            matchedByTitle
+              ? 'landing-title-search'
+              : 'ids'
+          )
+        : 'metadata';
+
+    if (
+      product.name &&
+      Number(
+        product.price ||
+        0
+      ) > 0
+    ) {
+      return product;
+    }
+  }
+
+  // Último fallback: se o próprio link curto trouxe metadata suficiente,
+  // usamos isso sem pedir nome/preço manualmente.
+  if (
+    landingTitle &&
+    landingPrice > 0
+  ) {
+    return {
+      platform:
+        'shopee',
+      itemId:
+        ids?.itemId
+          ? String(
+              ids.itemId
+            )
+          : '',
+      shopId:
+        ids?.shopId
+          ? String(
+              ids.shopId
+            )
+          : '',
+      name:
+        landingTitle,
+      imageUrl:
+        landingImage ||
+        null,
+      price:
+        landingPrice,
+      priceMin:
+        landingPrice,
+      priceMax:
+        landingPrice,
+      discountPct:
+        0,
+      rating:
+        0,
+      sales:
+        0,
+      productLink:
+        landing.finalUrl ||
+        exactLink,
+      canonicalUrl:
+        landing.finalUrl ||
+        exactLink,
+      affiliateLink:
+        exactLink,
+      affiliateLinkVerified:
+        true,
+      suppliedAffiliateLink:
+        true,
+      factsVerified:
+        true,
+      resolutionMethod:
+        'landing-metadata'
+    };
+  }
+
+  throw new Error(
+    'Consegui abrir seu link de afiliada, mas a Shopee não expôs dados suficientes para confirmar o produto automaticamente. Não vou pedir para você preencher tudo manualmente: tente outro link do mesmo produto ou use o link completo da página da Shopee.'
+  );
 }
+
