@@ -6668,10 +6668,21 @@ export function startTelegram({ token, adminId }) {
         force: true
       });
 
-      await ctx.reply(
-        `✅ Encontrei ${list.length} oportunidade(s).`,
-        mainMenu()
-      );
+      if (
+        list.length
+      ) {
+        await ctx.reply(
+          `✅ Encontrei ${list.length} oportunidade(s) nova(s).`,
+          mainMenu()
+        );
+      } else {
+        await ctx.reply(
+          '🔎 A rodada terminou sem produto novo válido.\n\n' +
+            'A Auri ampliou a pesquisa e aplicou o modo de resgate sem repetir o mesmo produto. ' +
+            'Ela continuará tentando nas próximas rodadas.',
+          mainMenu()
+        );
+      }
     } catch (e) {
       await ctx.reply(
         `⚠️ ${e.message}`,

@@ -25,6 +25,7 @@ export const config = {
   trendsTermsPerMarketplace: Math.max(3, Math.min(8, envInt('TRENDS_TERMS_PER_MARKETPLACE', 5))),
   trendsSeedsPerMarketplace: Math.max(4, Math.min(8, envInt('TRENDS_SEEDS_PER_MARKETPLACE', 6))),
   discoveryRepeatBlockDays: Math.max(30, envInt('AUTO_DISCOVERY_REPEAT_BLOCK_DAYS', 120)),
+  discoverySimilarBlockDays: Math.max(1, envInt('AUTO_DISCOVERY_SIMILAR_BLOCK_DAYS', 14)),
   autoQueueMaxSize: Math.max(10, Math.min(120, envInt('AUTO_QUEUE_MAX_SIZE', 85))),
   autoQueueStrictValidation: envBool('AUTO_QUEUE_STRICT_VALIDATION', true),
   discoveryEveryMinutes: Math.max(60, envInt('AUTO_DISCOVERY_EVERY_MINUTES', 120)),
@@ -32,7 +33,7 @@ export const config = {
   discoveryDailyTarget: Math.max(1, envInt('AUTO_DISCOVERY_DAILY_TARGET', 85)),
   discoverySuggestionCap: Math.max(50, envInt('AUTO_DISCOVERY_SUGGESTION_CAP', 180)),
   discoveryMinSales: Math.max(50, envInt('AUTO_DISCOVERY_MIN_SALES', 50)),
-  discoveryCategoriesPerRun: Math.max(4, Math.min(16, envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 12))),
+  discoveryCategoriesPerRun: Math.max(4, Math.min(16, envInt('AUTO_DISCOVERY_CATEGORIES_PER_RUN', 16))),
   discoveryHomeKeywords: env(
     'AUTO_DISCOVERY_HOME_KEYWORDS',
     [

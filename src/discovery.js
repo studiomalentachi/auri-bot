@@ -173,18 +173,19 @@ function isMaternityBlocked(
   );
 }
 
-function seenProductMemory() {
+function seenProductMemory(
+  days =
+    config.discoveryRepeatBlockDays ||
+    120
+) {
   const s =
     readStore();
 
   const cutoff =
     Date.now() -
     Math.max(
-      30,
-      Number(
-        config.discoveryRepeatBlockDays ||
-        120
-      )
+      1,
+      Number(days || 1)
     ) *
       86400000;
 
@@ -201,7 +202,7 @@ function seenProductMemory() {
   );
 }
 
-function alreadySeenDiscovery(
+function alreadySeenExact(
   product,
   link = ''
 ) {
@@ -217,42 +218,67 @@ function alreadySeenDiscovery(
     );
 
   const memory =
-    seenProductMemory();
+    seenProductMemory(
+      config.discoveryRepeatBlockDays ||
+      120
+    );
 
-  for (
-    const item of
-    memory
-  ) {
-    if (
-      key &&
-      item.key === key
-    ) {
-      return true;
-    }
+  return memory.some(
+    (item) =>
+      Boolean(
+        (
+          key &&
+          item.key === key
+        ) ||
+        (
+          tKey &&
+          item.titleKey === tKey
+        )
+      )
+  );
+}
 
-    if (
-      tKey &&
-      item.titleKey ===
-        tKey
-    ) {
-      return true;
-    }
+function recentlySeenSimilar(
+  product
+) {
+  const name =
+    String(
+      product?.name || ''
+    ).trim();
 
-    // Bloqueia anúncios muito parecidos do mesmo produto,
-    // mesmo quando mudam de vendedor ou marketplace.
-    if (
-      product?.name &&
-      item.title &&
-      titleSimilarity(
-        product.name,
-        item.title
-      ) >= 0.82
-    ) {
-      return true;
-    }
+  if (!name) {
+    return false;
   }
 
-  return false;
+  const memory =
+    seenProductMemory(
+      config.discoverySimilarBlockDays ||
+      14
+    );
+
+  return memory.some(
+    (item) =>
+      item.title &&
+      titleSimilarity(
+        name,
+        item.title
+      ) >= 0.90
+  );
+}
+
+function alreadySeenDiscovery(
+  product,
+  link = ''
+) {
+  return (
+    alreadySeenExact(
+      product,
+      link
+    ) ||
+    recentlySeenSimilar(
+      product
+    )
+  );
 }
 
 function rememberDiscoveryProducts(
@@ -327,7 +353,7 @@ function rememberDiscoveryProducts(
 
       if (
         unique.length >=
-        5000
+        3000
       ) {
         break;
       }
@@ -927,7 +953,7 @@ async function discoverShopee(categories) {
               MIN_SALES(),
             desired:
               Math.max(
-                20,
+                30,
                 Number(
                   filters.resultLimit ||
                   20
@@ -936,8 +962,8 @@ async function discoverShopee(categories) {
             pages:
               filters.broadSearch ===
               false
-                ? 2
-                : 4,
+                ? 3
+                : 5,
             limitPerPage:
               20,
             sortType:
@@ -1902,13 +1928,18 @@ export async function discoverWebOffers({
   let madeProgress =
     true;
 
-  // Round-robin de verdade:
-  // pega 1 da Shopee, 1 do ML, 1 da SHEIN e repete.
-  // Se um marketplace não tiver mais resultados válidos,
-  // os outros continuam preenchendo as vagas.
+  const target =
+    Math.max(
+      10,
+      Number(
+        config.discoveryMaxPerRun ||
+        30
+      )
+    );
+
   while (
     selected.length <
-      config.discoveryMaxPerRun &&
+      target &&
     madeProgress
   ) {
     madeProgress =
@@ -1920,7 +1951,7 @@ export async function discoverWebOffers({
     ) {
       if (
         selected.length >=
-        config.discoveryMaxPerRun
+        target
       ) {
         break;
       }
@@ -1972,6 +2003,99 @@ export async function discoverWebOffers({
 
         break;
       }
+    }
+  }
+
+  if (
+    selected.length <
+    Math.min(
+      10,
+      target
+    )
+  ) {
+    const rescue =
+      combined
+        .filter(
+          (p) => {
+            const k =
+              productKey(
+                p,
+                p.publicLink ||
+                p.canonicalUrl
+              );
+
+            return Boolean(
+              k &&
+              !existing.has(k) &&
+              !seen.has(k) &&
+              !isDuplicate(
+                p,
+                p.affiliateLink ||
+                p.publicLink ||
+                p.canonicalUrl
+              ) &&
+              !alreadySeenExact(
+                p,
+                p.affiliateLink ||
+                p.publicLink ||
+                p.canonicalUrl
+              ) &&
+              !similarToSentToday(
+                p
+              ) &&
+              !isMaternityBlocked(
+                p
+              ) &&
+              Number(
+                p.sales || 0
+              ) >=
+                MIN_SALES() &&
+              p.factsVerified &&
+              p.name &&
+              Number(
+                p.price || 0
+              ) > 0
+            );
+          }
+        )
+        .sort(
+          (a, b) =>
+            Number(
+              b.verifiedScore ||
+              0
+            ) -
+            Number(
+              a.verifiedScore ||
+              0
+            )
+        );
+
+    for (
+      const p of rescue
+    ) {
+      if (
+        selected.length >=
+        target
+      ) {
+        break;
+      }
+
+      const k =
+        productKey(
+          p,
+          p.publicLink ||
+          p.canonicalUrl
+        );
+
+      if (
+        !k ||
+        seen.has(k)
+      ) {
+        continue;
+      }
+
+      seen.add(k);
+      selected.push(p);
     }
   }
 
