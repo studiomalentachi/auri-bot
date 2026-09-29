@@ -6671,15 +6671,33 @@ export function startTelegram({ token, adminId }) {
       if (
         list.length
       ) {
+        const stats =
+          readStore()
+            .lastDiscoveryStats ||
+          {};
+
         await ctx.reply(
-          `✅ Encontrei ${list.length} oportunidade(s) nova(s).`,
+          `✅ Encontrei ${list.length} oportunidade(s) nova(s).\n\n` +
+            `🧡 Shopee: ${stats.shopee || 0}\n` +
+            `💛 Mercado Livre: ${stats.mercadolivre || 0}\n` +
+            `🖤 SHEIN: ${stats.shein || 0}\n` +
+            `📦 Candidatos após busca profunda: ${stats.combined || 0}`,
           mainMenu()
         );
       } else {
+        const stats =
+          readStore()
+            .lastDiscoveryStats ||
+          {};
+
         await ctx.reply(
-          '🔎 A rodada terminou sem produto novo válido.\n\n' +
-            'A Auri ampliou a pesquisa e aplicou o modo de resgate sem repetir o mesmo produto. ' +
-            'Ela continuará tentando nas próximas rodadas.',
+          '🔎 Ainda não entrou produto novo nessa rodada.\n\n' +
+            `🧡 Shopee encontrada: ${stats.shopee || 0}\n` +
+            `💛 Mercado Livre encontrado: ${stats.mercadolivre || 0}\n` +
+            `🖤 SHEIN encontrada: ${stats.shein || 0}\n` +
+            `📦 Candidatos depois da busca profunda: ${stats.combined || 0}\n` +
+            `✅ Selecionados: ${stats.selected || 0}\n\n` +
+            'A próxima rodada vai pesquisar outra janela de páginas da Shopee, em vez de consultar sempre os mesmos produtos do topo.',
           mainMenu()
         );
       }

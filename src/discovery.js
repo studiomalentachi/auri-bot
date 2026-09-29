@@ -212,10 +212,9 @@ function alreadySeenExact(
       link
     );
 
-  const tKey =
-    titleKey(
-      product?.name
-    );
+  if (!key) {
+    return false;
+  }
 
   const memory =
     seenProductMemory(
@@ -225,16 +224,7 @@ function alreadySeenExact(
 
   return memory.some(
     (item) =>
-      Boolean(
-        (
-          key &&
-          item.key === key
-        ) ||
-        (
-          tKey &&
-          item.titleKey === tKey
-        )
-      )
+      item.key === key
   );
 }
 
@@ -252,8 +242,7 @@ function recentlySeenSimilar(
 
   const memory =
     seenProductMemory(
-      config.discoverySimilarBlockDays ||
-      14
+      7
     );
 
   return memory.some(
@@ -262,7 +251,7 @@ function recentlySeenSimilar(
       titleSimilarity(
         name,
         item.title
-      ) >= 0.90
+      ) >= 0.95
   );
 }
 
@@ -930,10 +919,27 @@ function scoreProduct(p) {
   );
 }
 
-async function discoverShopee(categories) {
+async function discoverShopee(
+  categories,
+  {
+    deep = false
+  } = {}
+) {
   if (!isShopeeConfigured()) {
     return [];
   }
+
+  const state =
+    readStore();
+
+  const pageCursor =
+    Math.max(
+      1,
+      Number(
+        state.discoveryShopeePageCursor ||
+        1
+      )
+    );
 
   const all = [];
   const seen = new Set();
@@ -952,18 +958,28 @@ async function discoverShopee(categories) {
             minSales:
               MIN_SALES(),
             desired:
-              Math.max(
-                30,
-                Number(
-                  filters.resultLimit ||
-                  20
-                )
-              ),
+              deep
+                ? 80
+                : Math.max(
+                    35,
+                    Number(
+                      filters.resultLimit ||
+                      20
+                    )
+                  ),
             pages:
-              filters.broadSearch ===
-              false
-                ? 3
-                : 5,
+              deep
+                ? 8
+                : (
+                    filters.broadSearch ===
+                    false
+                      ? 3
+                      : 5
+                  ),
+            startPage:
+              deep
+                ? pageCursor
+                : 1,
             limitPerPage:
               20,
             sortType:
@@ -1104,6 +1120,20 @@ async function discoverShopee(categories) {
         e.message
       );
     }
+  }
+
+  if (deep) {
+    updateStore((s) => {
+      const next =
+        pageCursor + 8;
+
+      s.discoveryShopeePageCursor =
+        next > 24
+          ? 2
+          : next;
+
+      return s;
+    });
   }
 
   return all;
@@ -1831,11 +1861,93 @@ export async function discoverWebOffers({
         : Promise.resolve([])
     ]);
 
-  const combined = [
+  let combined = [
     ...shopee,
     ...ml,
     ...shein
   ];
+
+  // Se as fontes normais não entregarem candidatos suficientes, faz uma
+  // busca profunda na Shopee em páginas diferentes das que já vimos.
+  if (
+    combined.length <
+    10 &&
+    enabled.has('shopee')
+  ) {
+    const deepCategories = [
+      ...new Set([
+        ...categories.slice(0, 6),
+        'casa',
+        'cozinha',
+        'organização',
+        'beleza',
+        'tecnologia',
+        'moda feminina',
+        'eletrodomésticos',
+        'móveis'
+      ])
+    ].slice(0, 10);
+
+    const deepShopee =
+      await discoverShopee(
+        deepCategories,
+        {
+          deep: true
+        }
+      ).catch(
+        () => []
+      );
+
+    const keys =
+      new Set(
+        combined.map(
+          (p) =>
+            productKey(
+              p,
+              p.publicLink ||
+              p.canonicalUrl ||
+              p.productLink
+            )
+        )
+      );
+
+    for (
+      const p of deepShopee
+    ) {
+      const k =
+        productKey(
+          p,
+          p.publicLink ||
+          p.canonicalUrl ||
+          p.productLink
+        );
+
+      if (
+        k &&
+        !keys.has(k)
+      ) {
+        keys.add(k);
+        combined.push(p);
+      }
+    }
+  }
+
+  updateStore((s) => {
+    s.lastDiscoveryStats = {
+      shopee:
+        shopee.length,
+      mercadolivre:
+        ml.length,
+      shein:
+        shein.length,
+      combined:
+        combined.length,
+      selected:
+        0
+    };
+
+    return s;
+  });
 
   const existing =
     existingKeys();
@@ -2111,6 +2223,16 @@ export async function discoverWebOffers({
     }
 
     return x;
+  });
+
+  updateStore((s) => {
+    s.lastDiscoveryStats = {
+      ...(s.lastDiscoveryStats || {}),
+      selected:
+        selected.length
+    };
+
+    return s;
   });
 
   // Assim que aparece numa rodada, fica registrado na memória
