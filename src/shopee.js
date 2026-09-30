@@ -38,7 +38,7 @@ const fields = `
 `;
 
 export async function searchShopeeOffers(keyword, { page = 1, limit = 10, sortType = 5, itemId = null, shopId = null } = {}) {
-  const query = `query ProductOffers($keyword:String,$page:Int,$limit:Int,$sortType:Int,$itemId:Int,$shopId:Int){
+  const query = `query ProductOffers($keyword:String,$page:Int,$limit:Int,$sortType:Int,$itemId:Int64,$shopId:Int64){
     productOfferV2(keyword:$keyword,page:$page,limit:$limit,sortType:$sortType,itemId:$itemId,shopId:$shopId){
       nodes { ${fields} }
       pageInfo { page limit hasNextPage }
