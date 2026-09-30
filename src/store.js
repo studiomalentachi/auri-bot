@@ -27,14 +27,6 @@ const defaults = {
     updatedAt: null
   },
   discoverySeenProducts: [],
-  discoveryShopeePageCursor: 1,
-  lastDiscoveryStats: {
-    shopee: 0,
-    mercadolivre: 0,
-    shein: 0,
-    combined: 0,
-    selected: 0
-  },
   enabledMarketplaces: [
     'shopee',
     'shein',

@@ -173,19 +173,18 @@ function isMaternityBlocked(
   );
 }
 
-function seenProductMemory(
-  days =
-    config.discoveryRepeatBlockDays ||
-    120
-) {
+function seenProductMemory() {
   const s =
     readStore();
 
   const cutoff =
     Date.now() -
     Math.max(
-      1,
-      Number(days || 1)
+      30,
+      Number(
+        config.discoveryRepeatBlockDays ||
+        120
+      )
     ) *
       86400000;
 
@@ -202,7 +201,7 @@ function seenProductMemory(
   );
 }
 
-function alreadySeenExact(
+function alreadySeenDiscovery(
   product,
   link = ''
 ) {
@@ -212,62 +211,48 @@ function alreadySeenExact(
       link
     );
 
-  if (!key) {
-    return false;
-  }
-
-  const memory =
-    seenProductMemory(
-      config.discoveryRepeatBlockDays ||
-      120
+  const tKey =
+    titleKey(
+      product?.name
     );
 
-  return memory.some(
-    (item) =>
+  const memory =
+    seenProductMemory();
+
+  for (
+    const item of
+    memory
+  ) {
+    if (
+      key &&
       item.key === key
-  );
-}
+    ) {
+      return true;
+    }
 
-function recentlySeenSimilar(
-  product
-) {
-  const name =
-    String(
-      product?.name || ''
-    ).trim();
+    if (
+      tKey &&
+      item.titleKey ===
+        tKey
+    ) {
+      return true;
+    }
 
-  if (!name) {
-    return false;
-  }
-
-  const memory =
-    seenProductMemory(
-      7
-    );
-
-  return memory.some(
-    (item) =>
+    // Bloqueia anúncios muito parecidos do mesmo produto,
+    // mesmo quando mudam de vendedor ou marketplace.
+    if (
+      product?.name &&
       item.title &&
       titleSimilarity(
-        name,
+        product.name,
         item.title
-      ) >= 0.95
-  );
-}
+      ) >= 0.82
+    ) {
+      return true;
+    }
+  }
 
-function alreadySeenDiscovery(
-  product,
-  link = ''
-) {
-  return (
-    alreadySeenExact(
-      product,
-      link
-    ) ||
-    recentlySeenSimilar(
-      product
-    )
-  );
+  return false;
 }
 
 function rememberDiscoveryProducts(
@@ -342,7 +327,7 @@ function rememberDiscoveryProducts(
 
       if (
         unique.length >=
-        3000
+        5000
       ) {
         break;
       }
@@ -919,27 +904,10 @@ function scoreProduct(p) {
   );
 }
 
-async function discoverShopee(
-  categories,
-  {
-    deep = false
-  } = {}
-) {
+async function discoverShopee(categories) {
   if (!isShopeeConfigured()) {
     return [];
   }
-
-  const state =
-    readStore();
-
-  const pageCursor =
-    Math.max(
-      1,
-      Number(
-        state.discoveryShopeePageCursor ||
-        1
-      )
-    );
 
   const all = [];
   const seen = new Set();
@@ -958,28 +926,18 @@ async function discoverShopee(
             minSales:
               MIN_SALES(),
             desired:
-              deep
-                ? 80
-                : Math.max(
-                    35,
-                    Number(
-                      filters.resultLimit ||
-                      20
-                    )
-                  ),
+              Math.max(
+                20,
+                Number(
+                  filters.resultLimit ||
+                  20
+                )
+              ),
             pages:
-              deep
-                ? 8
-                : (
-                    filters.broadSearch ===
-                    false
-                      ? 3
-                      : 5
-                  ),
-            startPage:
-              deep
-                ? pageCursor
-                : 1,
+              filters.broadSearch ===
+              false
+                ? 2
+                : 4,
             limitPerPage:
               20,
             sortType:
@@ -1120,20 +1078,6 @@ async function discoverShopee(
         e.message
       );
     }
-  }
-
-  if (deep) {
-    updateStore((s) => {
-      const next =
-        pageCursor + 8;
-
-      s.discoveryShopeePageCursor =
-        next > 24
-          ? 2
-          : next;
-
-      return s;
-    });
   }
 
   return all;
@@ -1861,93 +1805,11 @@ export async function discoverWebOffers({
         : Promise.resolve([])
     ]);
 
-  let combined = [
+  const combined = [
     ...shopee,
     ...ml,
     ...shein
   ];
-
-  // Se as fontes normais não entregarem candidatos suficientes, faz uma
-  // busca profunda na Shopee em páginas diferentes das que já vimos.
-  if (
-    combined.length <
-    10 &&
-    enabled.has('shopee')
-  ) {
-    const deepCategories = [
-      ...new Set([
-        ...categories.slice(0, 6),
-        'casa',
-        'cozinha',
-        'organização',
-        'beleza',
-        'tecnologia',
-        'moda feminina',
-        'eletrodomésticos',
-        'móveis'
-      ])
-    ].slice(0, 10);
-
-    const deepShopee =
-      await discoverShopee(
-        deepCategories,
-        {
-          deep: true
-        }
-      ).catch(
-        () => []
-      );
-
-    const keys =
-      new Set(
-        combined.map(
-          (p) =>
-            productKey(
-              p,
-              p.publicLink ||
-              p.canonicalUrl ||
-              p.productLink
-            )
-        )
-      );
-
-    for (
-      const p of deepShopee
-    ) {
-      const k =
-        productKey(
-          p,
-          p.publicLink ||
-          p.canonicalUrl ||
-          p.productLink
-        );
-
-      if (
-        k &&
-        !keys.has(k)
-      ) {
-        keys.add(k);
-        combined.push(p);
-      }
-    }
-  }
-
-  updateStore((s) => {
-    s.lastDiscoveryStats = {
-      shopee:
-        shopee.length,
-      mercadolivre:
-        ml.length,
-      shein:
-        shein.length,
-      combined:
-        combined.length,
-      selected:
-        0
-    };
-
-    return s;
-  });
 
   const existing =
     existingKeys();
@@ -2040,18 +1902,13 @@ export async function discoverWebOffers({
   let madeProgress =
     true;
 
-  const target =
-    Math.max(
-      10,
-      Number(
-        config.discoveryMaxPerRun ||
-        30
-      )
-    );
-
+  // Round-robin de verdade:
+  // pega 1 da Shopee, 1 do ML, 1 da SHEIN e repete.
+  // Se um marketplace não tiver mais resultados válidos,
+  // os outros continuam preenchendo as vagas.
   while (
     selected.length <
-      target &&
+      config.discoveryMaxPerRun &&
     madeProgress
   ) {
     madeProgress =
@@ -2063,7 +1920,7 @@ export async function discoverWebOffers({
     ) {
       if (
         selected.length >=
-        target
+        config.discoveryMaxPerRun
       ) {
         break;
       }
@@ -2118,99 +1975,6 @@ export async function discoverWebOffers({
     }
   }
 
-  if (
-    selected.length <
-    Math.min(
-      10,
-      target
-    )
-  ) {
-    const rescue =
-      combined
-        .filter(
-          (p) => {
-            const k =
-              productKey(
-                p,
-                p.publicLink ||
-                p.canonicalUrl
-              );
-
-            return Boolean(
-              k &&
-              !existing.has(k) &&
-              !seen.has(k) &&
-              !isDuplicate(
-                p,
-                p.affiliateLink ||
-                p.publicLink ||
-                p.canonicalUrl
-              ) &&
-              !alreadySeenExact(
-                p,
-                p.affiliateLink ||
-                p.publicLink ||
-                p.canonicalUrl
-              ) &&
-              !similarToSentToday(
-                p
-              ) &&
-              !isMaternityBlocked(
-                p
-              ) &&
-              Number(
-                p.sales || 0
-              ) >=
-                MIN_SALES() &&
-              p.factsVerified &&
-              p.name &&
-              Number(
-                p.price || 0
-              ) > 0
-            );
-          }
-        )
-        .sort(
-          (a, b) =>
-            Number(
-              b.verifiedScore ||
-              0
-            ) -
-            Number(
-              a.verifiedScore ||
-              0
-            )
-        );
-
-    for (
-      const p of rescue
-    ) {
-      if (
-        selected.length >=
-        target
-      ) {
-        break;
-      }
-
-      const k =
-        productKey(
-          p,
-          p.publicLink ||
-          p.canonicalUrl
-        );
-
-      if (
-        !k ||
-        seen.has(k)
-      ) {
-        continue;
-      }
-
-      seen.add(k);
-      selected.push(p);
-    }
-  }
-
   updateStore((x) => {
     if (
       supportedPlatforms.length
@@ -2223,16 +1987,6 @@ export async function discoverWebOffers({
     }
 
     return x;
-  });
-
-  updateStore((s) => {
-    s.lastDiscoveryStats = {
-      ...(s.lastDiscoveryStats || {}),
-      selected:
-        selected.length
-    };
-
-    return s;
   });
 
   // Assim que aparece numa rodada, fica registrado na memória

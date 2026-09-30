@@ -192,7 +192,6 @@ export async function searchShopeeOffersBroad(
     minSales = 50,
     desired = 20,
     pages = 5,
-    startPage = 1,
     limitPerPage = 20,
     sortType = 5,
     broadSearch = true,
@@ -223,21 +222,14 @@ export async function searchShopeeOffersBroad(
     variants
   ) {
     for (
-      let offset = 0;
-      offset <
+      let page = 1;
+      page <=
       Math.max(
         1,
         Number(pages || 1)
       );
-      offset += 1
+      page += 1
     ) {
-      const page =
-        Math.max(
-          1,
-          Number(startPage || 1)
-        ) +
-        offset;
-
       let rows = [];
 
       try {
