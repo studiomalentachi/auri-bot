@@ -14,7 +14,7 @@ import {
 } from './seasonality.js';
 
 const BANNED =
-  /\b(beb[eê]|bebes|bebês|maternidade|gestante|amamenta(?:ção|cao)|fralda|mamadeira|chupeta|berço|berco|carrinho de bebê|carrinho de bebe)\b/i;
+  /\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|gr[aá]vida|gravidez|amamenta(?:ção|cao)|aleitamento|p[oó]s[- ]?parto|pos[- ]?parto|enxoval|fralda|mamadeira|chupeta|berço|berco|trocador|rec[eé]m[- ]?nascido|recem[- ]?nascido|body\s+(?:de\s+)?beb[eê]|carrinho\s+de\s+beb[eê]|carrinho\s+de\s+bebe|bolsa\s+maternidade|kit\s+maternidade|almofada\s+de\s+amamenta(?:ção|cao)|absorvente\s+de\s+seio)\b/i;
 
 const POOLS = {
   shopee: [

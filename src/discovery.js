@@ -32,7 +32,7 @@ const MIN_SALES = () => {
 };
 
 const BANNED_DISCOVERY =
-  /\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|amamenta(?:ção|cao)|fralda|mamadeira|chupeta|berço|berco|carrinho de bebê|carrinho de bebe|kit maternidade)\b/i;
+  /\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|gr[aá]vida|gravidez|amamenta(?:ção|cao)|aleitamento|p[oó]s[- ]?parto|pos[- ]?parto|enxoval|fralda|mamadeira|chupeta|berço|berco|trocador|rec[eé]m[- ]?nascido|recem[- ]?nascido|body\s+(?:de\s+)?beb[eê]|carrinho\s+de\s+beb[eê]|carrinho\s+de\s+bebe|bolsa\s+maternidade|kit\s+maternidade|almofada\s+de\s+amamenta(?:ção|cao)|absorvente\s+de\s+seio)\b/i;
 
 const TITLE_STOP_WORDS =
   new Set([
@@ -619,7 +619,7 @@ function nextCategories() {
     seasonal.keywords
       .filter(
         (x) =>
-          !/\b(beb[eê]|bebes|bebês|maternidade|gestante|fralda|mamadeira|chupeta|berço|berco)\b/i.test(
+          !/\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|gr[aá]vida|gravidez|amamenta(?:ção|cao)|aleitamento|p[oó]s[- ]?parto|pos[- ]?parto|enxoval|fralda|mamadeira|chupeta|berço|berco|trocador|rec[eé]m[- ]?nascido|recem[- ]?nascido|body\s+(?:de\s+)?beb[eê]|carrinho\s+de\s+beb[eê]|carrinho\s+de\s+bebe|bolsa\s+maternidade|kit\s+maternidade|almofada\s+de\s+amamenta(?:ção|cao)|absorvente\s+de\s+seio)\b/i.test(
             x
           )
       );

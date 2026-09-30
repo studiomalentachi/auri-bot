@@ -216,6 +216,29 @@ function slugMarketplace(value) {
     .slice(0, 40);
 }
 
+const MATERNITY_BLOCKED =
+  /\b(beb[eê]|bebes|bebês|maternidade|gestante|gestação|gestacao|gr[aá]vida|gravidez|amamenta(?:ção|cao)|aleitamento|p[oó]s[- ]?parto|pos[- ]?parto|enxoval|fralda|mamadeira|chupeta|berço|berco|trocador|rec[eé]m[- ]?nascido|recem[- ]?nascido|body\s+(?:de\s+)?beb[eê]|carrinho\s+de\s+beb[eê]|carrinho\s+de\s+bebe|bolsa\s+maternidade|kit\s+maternidade|almofada\s+de\s+amamenta(?:ção|cao)|absorvente\s+de\s+seio)\b/i;
+
+function isMaternitySearchBlocked(
+  productOrText
+) {
+  const text =
+    typeof productOrText ===
+      'string'
+      ? productOrText
+      : [
+          productOrText?.name,
+          productOrText?.shopName,
+          productOrText?.categoryName
+        ]
+          .filter(Boolean)
+          .join(' ');
+
+  return MATERNITY_BLOCKED.test(
+    String(text || '')
+  );
+}
+
 function searchFilterState() {
   const s =
     readStore();
@@ -4014,7 +4037,10 @@ export function startTelegram({ token, adminId }) {
                 Number(
                   p.sales || 0
                 ) >=
-                filters.minSales
+                  filters.minSales &&
+                !isMaternitySearchBlocked(
+                  p
+                )
             )
           ).slice(
             0,
