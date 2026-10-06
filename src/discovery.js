@@ -7,6 +7,7 @@ import {
   searchShopeeOffersBroad
 } from './shopee.js';
 import { importProductFromUrl } from './marketplaces.js';
+import { searchMeli } from './mercadolivre.js';
 import {
   getBrazilSeasonalContext
 } from './seasonality.js';
@@ -1175,53 +1176,47 @@ async function tavily(
 async function discoverMercadoLivre(
   categories
 ) {
-  const theme =
-    categories
-      .slice(0, 4)
-      .join(' ou ');
-
-  const results =
-    await tavily(
-      `${theme} Mercado Livre Brasil mais vendidos produto`,
-      ['mercadolivre.com.br'],
-      18
-    );
-
   const out = [];
   const seen = new Set();
 
-  for (const r of results) {
-    const url =
-      String(r?.url || '')
-        .trim();
+  const terms = [
+    ...new Set(
+      [
+        ...categories,
+        'casa',
+        'cozinha',
+        'organização',
+        'beleza',
+        'tecnologia',
+        'moda'
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+    )
+  ].slice(0, 6);
 
-    if (
-      !directUrl(
-        'mercadolivre',
-        url
-      )
-    ) {
+  for (const term of terms) {
+    let rows = [];
+
+    try {
+      rows = await searchMeli(term, 8);
+    } catch (e) {
+      console.error(
+        `Mercado Livre ${term}:`,
+        e.message
+      );
       continue;
     }
 
-    try {
-      // O URL é descoberto pela Tavily,
-      // mas os dados finais vêm da integração/API do ML.
-      const product =
-        await importProductFromUrl(
-          url
-        );
-
+    for (const product of rows) {
       if (
         !product ||
-        product.platform !==
-          'mercadolivre' ||
+        product.platform !== 'mercadolivre' ||
         !product.name ||
-        Number(product.price || 0) <=
-          0 ||
-        Number(product.sales || 0) <
-          MIN_SALES() ||
-        !product.canonicalUrl
+        Number(product.price || 0) <= 0 ||
+        Number(product.sales || 0) < MIN_SALES() ||
+        !product.canonicalUrl ||
+        isMaternityBlocked(product)
       ) {
         continue;
       }
@@ -1248,27 +1243,25 @@ async function discoverMercadoLivre(
       product.publicLink =
         product.canonicalUrl;
 
-      // Link afiliado do ML continua manual.
       product.affiliateLink =
+        product.affiliateLink ||
         null;
 
-      product.salesVerified =
-        true;
-
-      product.factsVerified =
-        true;
-
+      product.salesVerified = true;
+      product.factsVerified = true;
       product.dataSource =
-        'Mercado Livre API';
-
+        'Mercado Livre API — mais vendidos';
       product.verifiedFacts =
         verifiedFacts(product);
-
       product.verifiedScore =
         scoreProduct(product);
 
       out.push(product);
-    } catch {}
+
+      if (out.length >= 20) {
+        return out;
+      }
+    }
   }
 
   return out;
@@ -1584,70 +1577,147 @@ export async function refreshSheinProduct(
 async function discoverShein(
   categories
 ) {
-  const theme =
-    categories
-      .slice(0, 4)
-      .join(' ou ');
-
-  const results =
-    await tavily(
-      `${theme} SHEIN Brasil mais vendidos produto`,
-      [
-        'br.shein.com',
-        'shein.com'
-      ],
-      18
+  if (!process.env.TAVILY_API_KEY) {
+    console.error(
+      'SHEIN: TAVILY_API_KEY não configurada.'
     );
+    return [];
+  }
+
+  const terms = [
+    ...new Set(
+      [
+        ...categories,
+        'casa',
+        'organização',
+        'beleza',
+        'moda feminina',
+        'acessórios'
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+    )
+  ].slice(0, 5);
+
+  const discoveredUrls = [];
+  const urlSeen = new Set();
+
+  for (const term of terms) {
+    let results = [];
+
+    try {
+      results = await tavily(
+        `${term} SHEIN Brasil mais vendidos produto`,
+        ['br.shein.com', 'shein.com'],
+        10
+      );
+    } catch (e) {
+      console.error(
+        `SHEIN ${term}:`,
+        e.message
+      );
+      continue;
+    }
+
+    for (const r of results) {
+      const url =
+        String(r?.url || '').trim();
+
+      if (!directUrl('shein', url)) {
+        continue;
+      }
+
+      const key =
+        url
+          .toLowerCase()
+          .replace(/[?#].*$/, '');
+
+      if (!key || urlSeen.has(key)) {
+        continue;
+      }
+
+      urlSeen.add(key);
+      discoveredUrls.push(url);
+
+      if (discoveredUrls.length >= 24) {
+        break;
+      }
+    }
+
+    if (discoveredUrls.length >= 24) {
+      break;
+    }
+  }
 
   const out = [];
-  const seen =
-    new Set();
+  const productSeen = new Set();
 
-  for (const r of results) {
-    const url =
-      String(r?.url || '')
-        .trim();
+  for (
+    let i = 0;
+    i < discoveredUrls.length;
+    i += 6
+  ) {
+    const batch =
+      discoveredUrls.slice(i, i + 6);
 
-    if (
-      !directUrl(
-        'shein',
-        url
-      )
-    ) {
-      continue;
-    }
-
-    const product =
-      await fetchSheinVerified(
-        url
+    const settled =
+      await Promise.allSettled(
+        batch.map(
+          (url) =>
+            fetchSheinVerified(url)
+        )
       );
 
-    if (!product) {
-      continue;
+    for (const entry of settled) {
+      if (
+        entry.status !== 'fulfilled' ||
+        !entry.value
+      ) {
+        continue;
+      }
+
+      const product =
+        entry.value;
+
+      if (
+        isMaternityBlocked(product) ||
+        Number(product.sales || 0) <
+          MIN_SALES()
+      ) {
+        continue;
+      }
+
+      const key =
+        String(
+          product.canonicalUrl ||
+          product.publicLink ||
+          ''
+        )
+          .toLowerCase()
+          .replace(/[?#].*$/, '');
+
+      if (
+        !key ||
+        productSeen.has(key) ||
+        isDuplicate(
+          product,
+          product.canonicalUrl
+        )
+      ) {
+        continue;
+      }
+
+      productSeen.add(key);
+      out.push(product);
+
+      if (out.length >= 20) {
+        return out;
+      }
     }
-
-    const key =
-      product.canonicalUrl
-        .toLowerCase()
-        .replace(/[?#].*$/, '');
-
-    if (
-      seen.has(key) ||
-      isDuplicate(
-        product,
-        product.canonicalUrl
-      )
-    ) {
-      continue;
-    }
-
-    seen.add(key);
-    out.push(product);
   }
 
   return out;
 }
-
 
 export async function searchSheinOffers(keyword, limit = 8) {
   const term = String(keyword || '').trim();

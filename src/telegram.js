@@ -6623,11 +6623,29 @@ export function startTelegram({ token, adminId }) {
 
   bot.action('disc:toggle', async (ctx) => {
     updateStore((s) => {
-      s.autoDiscovery = !s.autoDiscovery;
+      s.autoDiscovery =
+        !s.autoDiscovery;
+
+      if (s.autoDiscovery) {
+        s.enabledMarketplaces = [
+          ...new Set([
+            ...(s.enabledMarketplaces || []),
+            'shopee',
+            'mercadolivre',
+            'shein'
+          ])
+        ];
+      }
+
       return s;
     });
 
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery(
+      readStore().autoDiscovery
+        ? 'Auto busca ligada: Shopee + Mercado Livre + SHEIN'
+        : 'Auto busca desligada'
+    );
+
     await showDiscovery(ctx);
   });
 
@@ -6642,6 +6660,15 @@ export function startTelegram({ token, adminId }) {
         ) {
           s.autoDiscovery =
             true;
+
+          s.enabledMarketplaces = [
+            ...new Set([
+              ...(s.enabledMarketplaces || []),
+              'shopee',
+              'mercadolivre',
+              'shein'
+            ])
+          ];
         }
 
         return s;
