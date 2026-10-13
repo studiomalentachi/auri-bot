@@ -682,12 +682,18 @@ async function showQueueItem(
     ],
     [
       Markup.button.callback(
-        '✏️ Editar texto',
-        `q:edittext:${index}:${page}`
+        '🧩 Editar campos',
+        `q:fields:${index}:${page}`
       ),
       Markup.button.callback(
         '📸 Trocar foto',
         `q:editphoto:${index}:${page}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '✏️ Editar texto inteiro',
+        `q:edittext:${index}:${page}`
       )
     ],
     [
@@ -1312,6 +1318,17 @@ async function beginSearch(ctx) {
     );
   }
 
+  if (
+    active.length >= 2
+  ) {
+    rows.unshift([
+      Markup.button.callback(
+        '🌐 Buscar nos 3 marketplaces',
+        'sp:all'
+      )
+    ]);
+  }
+
   rows.push([
     Markup.button.callback(
       '🎛️ Ajustar filtros',
@@ -1346,6 +1363,12 @@ function marketplaceLabel(platform) {
 
   const catalog =
     marketplaceCatalog();
+
+  if (
+    p === 'all'
+  ) {
+    return '🌐 Shopee + Mercado Livre + SHEIN';
+  }
 
   return (
     catalog[p]?.label ||
@@ -1599,6 +1622,22 @@ async function refreshReviewProduct(
     ...product,
     ...fresh,
 
+    ...(product.nameManuallyConfirmed === true
+      ? { name: product.name }
+      : {}),
+
+    ...(product.originalPriceManuallyConfirmed === true
+      ? { originalPrice: product.originalPrice }
+      : {}),
+
+    ...(product.discountManuallyConfirmed === true
+      ? { discountPct: product.discountPct }
+      : {}),
+
+    ...(product.ratingManuallyConfirmed === true
+      ? { rating: product.rating }
+      : {}),
+
     affiliateLink:
       product.affiliateLink ||
       fresh.affiliateLink ||
@@ -1689,6 +1728,138 @@ function saveRefreshedSuggestion(
 
     return s;
   });
+}
+
+function firstTextLine(value) {
+  return String(value || '')
+    .split('\n')
+    .map((x) => x.trim())
+    .find(Boolean) || '';
+}
+
+function preserveOfferTitle(
+  product,
+  text
+) {
+  if (!product) {
+    return product;
+  }
+
+  if (
+    !String(
+      product.customTitle ||
+      ''
+    ).trim()
+  ) {
+    const current =
+      firstTextLine(text);
+
+    if (current) {
+      product.customTitle =
+        current;
+    }
+  }
+
+  return product;
+}
+
+function parsePercentValue(value) {
+  const clean =
+    String(value || '')
+      .trim()
+      .replace('%', '')
+      .replace(',', '.');
+
+  const n =
+    Number(clean);
+
+  return Number.isFinite(n)
+    ? n
+    : null;
+}
+
+function parseRatingValue(value) {
+  const n =
+    parsePercentValue(value);
+
+  if (
+    n === null ||
+    n < 0 ||
+    n > 5
+  ) {
+    return null;
+  }
+
+  return n;
+}
+
+function isRemoveField(value) {
+  return /^(remover|tirar|apagar|sem|nenhum|nenhuma|0)$/i.test(
+    String(value || '').trim()
+  );
+}
+
+function editFieldPrompt(
+  field,
+  current = ''
+) {
+  const currentText =
+    current
+      ? `\n\nAtual: ${current}`
+      : '';
+
+  const prompts = {
+    title:
+      '✨ Envie o novo TÍTULO da oferta.\n\nEx.: PREÇO DESPENCOU NA SHÔ 👀🔥\n\nEnvie “Automático” para a Auri voltar a variar sozinha.',
+    name:
+      '📦 Envie o NOME DO PRODUTO que deve aparecer no texto.',
+    oldPrice:
+      '💸 Envie o preço antigo do “De:”.\n\nEx.: 129,90\n\nEnvie “Remover” para não mostrar o De:.',
+    price:
+      '💰 Envie o preço atual do “Por:”.\n\nEx.: 77,49',
+    discount:
+      '🔥 Envie somente a porcentagem de desconto.\n\nEx.: 25\n\nEnvie “Remover” para tirar a linha de desconto.',
+    rating:
+      '⭐ Envie a nota de 0 a 5.\n\nEx.: 4,8\n\nEnvie “Remover” para tirar a nota.'
+  };
+
+  return (
+    prompts[field] ||
+    'Envie o novo valor.'
+  ) + currentText;
+}
+
+async function rebuildQueueText(
+  index
+) {
+  const item =
+    readStore().queue?.[index];
+
+  if (!item) {
+    return null;
+  }
+
+  const copy =
+    await generateOfferCopy(
+      item.product || {}
+    );
+
+  updateStore((s) => {
+    if (s.queue?.[index]) {
+      s.queue[index].text =
+        copy.text;
+
+      s.queue[index].aiProvider =
+        copy.provider;
+
+      s.queue[index].aiGenerated =
+        true;
+    }
+
+    return s;
+  });
+
+  return copy;
 }
 
 function saveSuggestionDraft(d) {
@@ -1939,12 +2110,19 @@ async function renderApprovalCard(ctx, item) {
 
   rows.push([
     Markup.button.callback(
-      '✏️ Editar texto',
-      `edit:${id}`
+      '🧩 Editar campos',
+      `fields:${id}`
     ),
     Markup.button.callback(
       '📸 Trocar foto',
       `photoedit:${id}`
+    )
+  ]);
+
+  rows.push([
+    Markup.button.callback(
+      '✏️ Editar texto inteiro',
+      `edit:${id}`
     )
   ]);
 
@@ -3472,6 +3650,507 @@ export function startTelegram({ token, adminId }) {
       );
     }
 
+    if (
+      d.step ===
+      'suggestion_field_edit'
+    ) {
+      const field =
+        d.data.editField;
+
+      const product =
+        preserveOfferTitle(
+          d.data.product || {},
+          d.data.text || ''
+        );
+
+      const value =
+        String(
+          text || ''
+        ).trim();
+
+      if (field === 'title') {
+        if (
+          /^autom[aá]tico$/i.test(
+            value
+          )
+        ) {
+          delete product.customTitle;
+        } else if (value) {
+          product.customTitle =
+            value;
+        } else {
+          return ctx.reply(
+            '⚠️ O título não pode ficar vazio.'
+          );
+        }
+      }
+
+      if (field === 'name') {
+        if (!value) {
+          return ctx.reply(
+            '⚠️ O nome do produto não pode ficar vazio.'
+          );
+        }
+
+        product.name =
+          value;
+
+        product.nameManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'oldPrice') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.originalPrice =
+            0;
+        } else {
+          const parsed =
+            parseMoneyBR(
+              value
+            );
+
+          if (!parsed) {
+            return ctx.reply(
+              '⚠️ Digite um valor válido, por exemplo: 129,90'
+            );
+          }
+
+          product.originalPrice =
+            parsed;
+
+          if (
+            Number(
+              product.price || 0
+            ) > 0 &&
+            parsed >
+              Number(
+                product.price
+              )
+          ) {
+            product.discountPct =
+              (
+                (
+                  parsed -
+                  Number(
+                    product.price
+                  )
+                ) /
+                parsed
+              ) *
+              100;
+          }
+        }
+
+        product.originalPriceManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'price') {
+        const parsed =
+          parseMoneyBR(
+            value
+          );
+
+        if (!parsed) {
+          return ctx.reply(
+            '⚠️ Digite um valor válido, por exemplo: 77,49'
+          );
+        }
+
+        product.price =
+          parsed;
+
+        product.priceMin =
+          parsed;
+
+        product.priceMax =
+          parsed;
+
+        product.priceManuallyConfirmed =
+          true;
+
+        product.manualPriceAt =
+          new Date()
+            .toISOString();
+
+        const old =
+          Number(
+            product.originalPrice ||
+            0
+          );
+
+        if (old > parsed) {
+          product.discountPct =
+            (
+              (
+                old -
+                parsed
+              ) /
+              old
+            ) *
+            100;
+        }
+      }
+
+      if (field === 'discount') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.discountPct =
+            0;
+        } else {
+          const parsed =
+            parsePercentValue(
+              value
+            );
+
+          if (
+            parsed === null ||
+            parsed < 0 ||
+            parsed > 100
+          ) {
+            return ctx.reply(
+              '⚠️ Digite uma porcentagem entre 0 e 100. Ex.: 25'
+            );
+          }
+
+          product.discountPct =
+            parsed;
+        }
+
+        product.discountManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'rating') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.rating =
+            0;
+        } else {
+          const parsed =
+            parseRatingValue(
+              value
+            );
+
+          if (parsed === null) {
+            return ctx.reply(
+              '⚠️ Digite uma nota entre 0 e 5. Ex.: 4,8'
+            );
+          }
+
+          product.rating =
+            parsed;
+        }
+
+        product.ratingManuallyConfirmed =
+          true;
+      }
+
+      d.data.product =
+        product;
+
+      const copy =
+        await generateOfferCopy(
+          product,
+          'Campo editado manualmente pela usuária.'
+        );
+
+      d.data.text =
+        copy.text;
+
+      d.data.aiProvider =
+        copy.provider;
+
+      d.data.aiGenerated =
+        true;
+
+      d.step =
+        'suggestion_review';
+
+      delete d.data.editField;
+
+      saveSuggestionDraft(d);
+
+      drafts.set(
+        ctx.from.id,
+        d
+      );
+
+      await ctx.reply(
+        '✅ Campo atualizado. O restante do texto foi preservado.',
+        Markup.removeKeyboard()
+      );
+
+      return renderApprovalCard(
+        ctx,
+        d.data
+      );
+    }
+
+    if (
+      d.step ===
+      'queue_field_edit'
+    ) {
+      const index =
+        Number(
+          d.data.queueIndex
+        );
+
+      const field =
+        d.data.editField;
+
+      const item =
+        readStore().queue?.[index];
+
+      if (!item) {
+        drafts.delete(
+          ctx.from.id
+        );
+
+        return ctx.reply(
+          '⚠️ Essa oferta não está mais na fila.',
+          mainMenu()
+        );
+      }
+
+      const product =
+        preserveOfferTitle(
+          item.product || {},
+          item.text || ''
+        );
+
+      const value =
+        String(
+          text || ''
+        ).trim();
+
+      if (field === 'title') {
+        if (
+          /^autom[aá]tico$/i.test(
+            value
+          )
+        ) {
+          delete product.customTitle;
+        } else if (value) {
+          product.customTitle =
+            value;
+        } else {
+          return ctx.reply(
+            '⚠️ O título não pode ficar vazio.'
+          );
+        }
+      }
+
+      if (field === 'name') {
+        if (!value) {
+          return ctx.reply(
+            '⚠️ O nome do produto não pode ficar vazio.'
+          );
+        }
+
+        product.name =
+          value;
+
+        product.nameManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'oldPrice') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.originalPrice =
+            0;
+        } else {
+          const parsed =
+            parseMoneyBR(
+              value
+            );
+
+          if (!parsed) {
+            return ctx.reply(
+              '⚠️ Digite um valor válido, por exemplo: 129,90'
+            );
+          }
+
+          product.originalPrice =
+            parsed;
+
+          if (
+            Number(
+              product.price || 0
+            ) > 0 &&
+            parsed >
+              Number(
+                product.price
+              )
+          ) {
+            product.discountPct =
+              (
+                (
+                  parsed -
+                  Number(
+                    product.price
+                  )
+                ) /
+                parsed
+              ) *
+              100;
+          }
+        }
+
+        product.originalPriceManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'price') {
+        const parsed =
+          parseMoneyBR(
+            value
+          );
+
+        if (!parsed) {
+          return ctx.reply(
+            '⚠️ Digite um valor válido, por exemplo: 77,49'
+          );
+        }
+
+        product.price =
+          parsed;
+
+        product.priceMin =
+          parsed;
+
+        product.priceMax =
+          parsed;
+
+        product.priceManuallyConfirmed =
+          true;
+
+        product.manualPriceAt =
+          new Date()
+            .toISOString();
+
+        const old =
+          Number(
+            product.originalPrice ||
+            0
+          );
+
+        if (old > parsed) {
+          product.discountPct =
+            (
+              (
+                old -
+                parsed
+              ) /
+              old
+            ) *
+            100;
+        }
+      }
+
+      if (field === 'discount') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.discountPct =
+            0;
+        } else {
+          const parsed =
+            parsePercentValue(
+              value
+            );
+
+          if (
+            parsed === null ||
+            parsed < 0 ||
+            parsed > 100
+          ) {
+            return ctx.reply(
+              '⚠️ Digite uma porcentagem entre 0 e 100. Ex.: 25'
+            );
+          }
+
+          product.discountPct =
+            parsed;
+        }
+
+        product.discountManuallyConfirmed =
+          true;
+      }
+
+      if (field === 'rating') {
+        if (
+          isRemoveField(
+            value
+          )
+        ) {
+          product.rating =
+            0;
+        } else {
+          const parsed =
+            parseRatingValue(
+              value
+            );
+
+          if (parsed === null) {
+            return ctx.reply(
+              '⚠️ Digite uma nota entre 0 e 5. Ex.: 4,8'
+            );
+          }
+
+          product.rating =
+            parsed;
+        }
+
+        product.ratingManuallyConfirmed =
+          true;
+      }
+
+      updateStore((s) => {
+        if (s.queue?.[index]) {
+          s.queue[index].product =
+            product;
+        }
+
+        return s;
+      });
+
+      await rebuildQueueText(
+        index
+      );
+
+      drafts.delete(
+        ctx.from.id
+      );
+
+      await ctx.reply(
+        '✅ Campo atualizado. O restante da oferta foi preservado.',
+        Markup.removeKeyboard()
+      );
+
+      return showQueueItem(
+        ctx,
+        index,
+        d.data.queuePage || 0
+      );
+    }
+
     if (d.step === 'queue_edit_text') {
       const edited =
         String(text || '')
@@ -3917,6 +4596,167 @@ export function startTelegram({ token, adminId }) {
 
         if (
           platform ===
+          'all'
+        ) {
+          const active =
+            automaticMarketplaces();
+
+          const tasks = [];
+
+          if (
+            active.includes(
+              'shopee'
+            )
+          ) {
+            tasks.push(
+              searchShopeeOffersBroad(
+                text,
+                {
+                  minSales:
+                    filters.minSales,
+                  desired:
+                    filters.resultLimit,
+                  pages:
+                    filters.broadSearch
+                      ? 5
+                      : 2,
+                  limitPerPage:
+                    20,
+                  sortType:
+                    5,
+                  broadSearch:
+                    filters.broadSearch,
+                  sortBy:
+                    filters.sortBy
+                }
+              )
+                .then(
+                  (rows) => ({
+                    platform:
+                      'shopee',
+                    rows
+                  })
+                )
+                .catch(
+                  () => ({
+                    platform:
+                      'shopee',
+                    rows: []
+                  })
+                )
+            );
+          }
+
+          if (
+            active.includes(
+              'mercadolivre'
+            )
+          ) {
+            tasks.push(
+              searchMarketplace(
+                'mercadolivre',
+                text,
+                filters.resultLimit
+              )
+                .then(
+                  (rows) => ({
+                    platform:
+                      'mercadolivre',
+                    rows
+                  })
+                )
+                .catch(
+                  () => ({
+                    platform:
+                      'mercadolivre',
+                    rows: []
+                  })
+                )
+            );
+          }
+
+          if (
+            active.includes(
+              'shein'
+            )
+          ) {
+            tasks.push(
+              searchSheinOffers(
+                text,
+                filters.resultLimit
+              )
+                .then(
+                  (rows) => ({
+                    platform:
+                      'shein',
+                    rows
+                  })
+                )
+                .catch(
+                  () => ({
+                    platform:
+                      'shein',
+                    rows: []
+                  })
+                )
+            );
+          }
+
+          const results =
+            await Promise.all(
+              tasks
+            );
+
+          // Intercala: Shopee → ML → SHEIN → Shopee...
+          const byPlatform =
+            Object.fromEntries(
+              results.map(
+                (x) => [
+                  x.platform,
+                  x.rows || []
+                ]
+              )
+            );
+
+          const order = [
+            'shopee',
+            'mercadolivre',
+            'shein'
+          ];
+
+          found = [];
+
+          let progress = true;
+
+          while (
+            found.length <
+              filters.resultLimit &&
+            progress
+          ) {
+            progress = false;
+
+            for (
+              const id of order
+            ) {
+              const row =
+                byPlatform[id]
+                  ?.shift();
+
+              if (row) {
+                found.push(row);
+                progress = true;
+              }
+
+              if (
+                found.length >=
+                filters.resultLimit
+              ) {
+                break;
+              }
+            }
+          }
+        } else if (
+          platform ===
           'shein'
         ) {
           found =
@@ -4066,10 +4906,22 @@ export function startTelegram({ token, adminId }) {
           lastSearch.map(
             (p, i) => [
               Markup.button.callback(
-                `${String(
+                `${
+                  platform === 'all'
+                    ? (
+                        p.platform === 'shopee'
+                          ? '🧡 '
+                          : p.platform === 'mercadolivre'
+                            ? '💛 '
+                            : p.platform === 'shein'
+                              ? '🖤 '
+                              : ''
+                      )
+                    : ''
+                }${String(
                   p.name ||
                   'Produto'
-                ).slice(0, 33)} • 🛒 ${Number(
+                ).slice(0, 30)} • 🛒 ${Number(
                   p.sales
                 ).toLocaleString(
                   'pt-BR'
@@ -4448,6 +5300,205 @@ export function startTelegram({ token, adminId }) {
       Number(
         ctx.match[2]
       )
+    );
+  });
+
+  bot.action(/^q:fields:(\d+):(\d+)$/, async (ctx) => {
+    const index =
+      Number(
+        ctx.match[1]
+      );
+
+    const page =
+      Number(
+        ctx.match[2]
+      );
+
+    const item =
+      readStore().queue?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    updateStore((s) => {
+      if (
+        s.queue?.[index]
+      ) {
+        s.queue[index].product =
+          preserveOfferTitle(
+            s.queue[index].product || {},
+            s.queue[index].text || ''
+          );
+      }
+
+      return s;
+    });
+
+    await ctx.answerCbQuery(
+      'Editar campos'
+    );
+
+    return ctx.reply(
+      '🧩 EDITAR CAMPOS DA FILA\n\nEscolha exatamente o que quer alterar:',
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '✨ Título',
+            `q:field:title:${index}:${page}`
+          ),
+          Markup.button.callback(
+            '📦 Produto',
+            `q:field:name:${index}:${page}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '💸 De:',
+            `q:field:oldPrice:${index}:${page}`
+          ),
+          Markup.button.callback(
+            '💰 Por:',
+            `q:field:price:${index}:${page}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '🔥 Desconto',
+            `q:field:discount:${index}:${page}`
+          ),
+          Markup.button.callback(
+            '⭐ Nota',
+            `q:field:rating:${index}:${page}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '🎟️ Cupom',
+            `q:coupon:${index}:${page}`
+          ),
+          Markup.button.callback(
+            '📸 Foto',
+            `q:editphoto:${index}:${page}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '⬅️ Voltar',
+            `q:open:${index}:${page}`
+          )
+        ]
+      ])
+    );
+  });
+
+  bot.action(/^q:field:(title|name|oldPrice|price|discount|rating):(\d+):(\d+)$/, async (ctx) => {
+    const field =
+      ctx.match[1];
+
+    const index =
+      Number(
+        ctx.match[2]
+      );
+
+    const page =
+      Number(
+        ctx.match[3]
+      );
+
+    const item =
+      readStore().queue?.[index];
+
+    if (!item) {
+      return ctx.answerCbQuery(
+        'Oferta não encontrada.'
+      );
+    }
+
+    const p =
+      item.product || {};
+
+    drafts.set(
+      ctx.from.id,
+      {
+        step:
+          'queue_field_edit',
+        mode:
+          'queue',
+        data: {
+          queueIndex:
+            index,
+          queuePage:
+            page,
+          editField:
+            field
+        }
+      }
+    );
+
+    const currentMap = {
+      title:
+        p.customTitle ||
+        firstTextLine(
+          item.text
+        ),
+      name:
+        p.name || '',
+      oldPrice:
+        Number(
+          p.originalPrice || 0
+        ) > 0
+          ? moneyBR(
+              p.originalPrice
+            )
+          : '—',
+      price:
+        Number(
+          p.price || 0
+        ) > 0
+          ? moneyBR(
+              p.price
+            )
+          : '—',
+      discount:
+        Number(
+          p.discountPct || 0
+        ) > 0
+          ? `${Math.round(
+              Number(
+                p.discountPct
+              )
+            )}%`
+          : '—',
+      rating:
+        Number(
+          p.rating || 0
+        ) > 0
+          ? Number(
+              p.rating
+            )
+              .toFixed(1)
+              .replace(
+                '.',
+                ','
+              )
+          : '—'
+    };
+
+    await ctx.answerCbQuery(
+      'Editar'
+    );
+
+    return ctx.reply(
+      editFieldPrompt(
+        field,
+        currentMap[field]
+      ),
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
     );
   });
 
@@ -4831,6 +5882,8 @@ export function startTelegram({ token, adminId }) {
         }
       } catch {}
     }
+
+    delete product.customTitle;
 
     const copy =
       await generateOfferCopy(
@@ -5355,6 +6408,216 @@ export function startTelegram({ token, adminId }) {
     await ctx.reply(
       '💜 Painel da Auri',
       mainMenu()
+    );
+  });
+
+  bot.action(/^fields:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    const id =
+      String(
+        ctx.match[1]
+      );
+
+    if (
+      !d ||
+      String(
+        d.data.id
+      ) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    d.data.product =
+      preserveOfferTitle(
+        d.data.product || {},
+        d.data.text || ''
+      );
+
+    saveSuggestionDraft(d);
+
+    await ctx.answerCbQuery(
+      'Editar campos'
+    );
+
+    return ctx.reply(
+      '🧩 EDITAR CAMPOS\n\nEscolha exatamente o que quer alterar:',
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            '✨ Título',
+            `field:title:${id}`
+          ),
+          Markup.button.callback(
+            '📦 Produto',
+            `field:name:${id}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '💸 De:',
+            `field:oldPrice:${id}`
+          ),
+          Markup.button.callback(
+            '💰 Por:',
+            `field:price:${id}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '🔥 Desconto',
+            `field:discount:${id}`
+          ),
+          Markup.button.callback(
+            '⭐ Nota',
+            `field:rating:${id}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '🎟️ Cupom',
+            `coupon:${id}`
+          ),
+          Markup.button.callback(
+            '📸 Foto',
+            `photoedit:${id}`
+          )
+        ],
+        [
+          Markup.button.callback(
+            '⬅️ Voltar',
+            `fieldback:${id}`
+          )
+        ]
+      ])
+    );
+  });
+
+  bot.action(/^fieldback:(.+)$/, async (ctx) => {
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    if (!d) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    await ctx.answerCbQuery();
+
+    return renderApprovalCard(
+      ctx,
+      d.data
+    );
+  });
+
+  bot.action(/^field:(title|name|oldPrice|price|discount|rating):(.+)$/, async (ctx) => {
+    const field =
+      ctx.match[1];
+
+    const id =
+      String(
+        ctx.match[2]
+      );
+
+    const d =
+      drafts.get(
+        ctx.from.id
+      );
+
+    if (
+      !d ||
+      String(
+        d.data.id
+      ) !== id
+    ) {
+      return ctx.answerCbQuery(
+        'Sugestão expirou.'
+      );
+    }
+
+    const p =
+      d.data.product || {};
+
+    d.step =
+      'suggestion_field_edit';
+
+    d.data.editField =
+      field;
+
+    drafts.set(
+      ctx.from.id,
+      d
+    );
+
+    const currentMap = {
+      title:
+        p.customTitle ||
+        firstTextLine(
+          d.data.text
+        ),
+      name:
+        p.name || '',
+      oldPrice:
+        Number(
+          p.originalPrice || 0
+        ) > 0
+          ? moneyBR(
+              p.originalPrice
+            )
+          : '—',
+      price:
+        Number(
+          p.price || 0
+        ) > 0
+          ? moneyBR(
+              p.price
+            )
+          : '—',
+      discount:
+        Number(
+          p.discountPct || 0
+        ) > 0
+          ? `${Math.round(
+              Number(
+                p.discountPct
+              )
+            )}%`
+          : '—',
+      rating:
+        Number(
+          p.rating || 0
+        ) > 0
+          ? Number(
+              p.rating
+            )
+              .toFixed(1)
+              .replace(
+                '.',
+                ','
+              )
+          : '—'
+    };
+
+    await ctx.answerCbQuery(
+      'Editar'
+    );
+
+    return ctx.reply(
+      editFieldPrompt(
+        field,
+        currentMap[field]
+      ),
+      Markup.keyboard([
+        [BTN.cancel]
+      ]).resize()
     );
   });
 
@@ -6230,6 +7493,12 @@ export function startTelegram({ token, adminId }) {
     const previousText =
       d.data.text || '';
 
+    if (
+      d.data.product
+    ) {
+      delete d.data.product.customTitle;
+    }
+
     const copy =
       await generateOfferCopy(
         d.data.product || {},
@@ -6287,6 +7556,7 @@ export function startTelegram({ token, adminId }) {
     await ctx.answerCbQuery();
 
     if (
+      platform !== 'all' &&
       !automaticMarketplaces()
         .includes(
           platform
@@ -6316,6 +7586,11 @@ export function startTelegram({ token, adminId }) {
 
     return ctx.reply(
       `${marketplaceLabel(platform)}\n\n` +
+        (
+          platform === 'all'
+            ? 'A Auri vai procurar o mesmo termo na Shopee, Mercado Livre e SHEIN e misturar os melhores resultados.\n\n'
+            : ''
+        ) +
         'Digite o que quer procurar.\n' +
         'Ex.: perfume, vestido, cafeteira, mochila, skincare, cadeira, chocolate…\n\n' +
         `🎛️ Filtros: ${filters.minSales}+ vendas • até ${filters.resultLimit} produtos • ${filters.broadSearch ? 'busca ampla' : 'busca exata'}.`,

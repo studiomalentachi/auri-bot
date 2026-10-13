@@ -240,22 +240,70 @@ function verifiedRating(product) {
     : 0;
 }
 
-const OFFER_TITLES = [
-  'ACHADINHO 🛍️',
-  'OLHA ESSE ACHADO 👀',
-  'ACHEI ISSO AQUI 😍',
-  'ACHADO DO DIA ✨',
-  'OFERTA BOA DEMAIS 🔥',
-  'OLHA O QUE EU ACHEI 🛒',
-  'ESSE VALE O CLIQUE 👀',
-  'PASSANDO PRA DEIXAR ESSE ACHADO ✨',
-  'ENCONTREI ESSE AQUI 🛍️',
-  'ACHADINHO DA VEZ 💜'
-];
+const OFFER_TITLES = {
+  shopee: [
+    'PREÇO DESPENCOU NA SHÔ 👀🔥',
+    'NESSE PREÇO É LOUCURAAA 🤯',
+    'ACHADINHO NA SHÔ 🛍️✨',
+    'OLHA ESSA OFERTA NA SHÔ 👀',
+    'TÁ VALENDO MUITO 🔥',
+    'ACHADO DO DIA NA SHÔ ✨'
+  ],
+  mercadolivre: [
+    'PREÇO BAIXOU NO ML 👀🔥',
+    'ACHADINHO NO MERCADO LIVRE 💛',
+    'OLHA ESSA OFERTA NO ML 🛒',
+    'NESSE PREÇO VALE DEMAIS 🤯',
+    'ACHADO DO DIA NO ML ✨',
+    'OFERTA BOA NO MERCADO LIVRE 🔥'
+  ],
+  shein: [
+    'ACHADINHO NA SHEIN 🖤✨',
+    'OLHA ESSA OFERTA NA SHEIN 👀',
+    'PREÇO BOM NA SHEIN 🔥',
+    'ACHEI ISSO NA SHEIN 😍',
+    'ACHADO DO DIA NA SHEIN ✨',
+    'VALE DAR UMA OLHADA 🖤'
+  ],
+  generic: [
+    'ACHADINHO 🛍️',
+    'OLHA ESSE ACHADO 👀',
+    'NESSE PREÇO É LOUCURAAA 🤯',
+    'ACHADO DO DIA ✨',
+    'OFERTA BOA DEMAIS 🔥',
+    'PASSANDO PRA DEIXAR ESSE ACHADO ✨'
+  ]
+};
+
+function titleBank(product) {
+  const platform =
+    String(
+      product?.platform ||
+      ''
+    ).toLowerCase();
+
+  return (
+    OFFER_TITLES[platform] ||
+    OFFER_TITLES.generic
+  );
+}
 
 function nextTitle(product) {
+  const custom =
+    String(
+      product?.customTitle ||
+      ''
+    ).trim();
+
+  if (custom) {
+    return custom;
+  }
+
+  const bank =
+    titleBank(product);
+
   let selected =
-    OFFER_TITLES[0];
+    bank[0];
 
   updateStore((s) => {
     const current =
@@ -264,21 +312,57 @@ function nextTitle(product) {
       );
 
     selected =
-      OFFER_TITLES[
+      bank[
         current %
-        OFFER_TITLES.length
+        bank.length
       ];
 
     s.copyTitleIndex =
-      (
-        current + 1
-      ) %
-      OFFER_TITLES.length;
+      current + 1;
 
     return s;
   });
 
   return selected;
+}
+
+function verifiedOriginalPrice(product) {
+  const oldPrice =
+    Number(
+      product?.originalPrice ||
+      0
+    );
+
+  const current =
+    Number(
+      product?.price ||
+      0
+    );
+
+  return (
+    Number.isFinite(oldPrice) &&
+    Number.isFinite(current) &&
+    oldPrice > current &&
+    current > 0
+  )
+    ? money(oldPrice)
+    : null;
+}
+
+function verifiedCoupon(product) {
+  const coupon =
+    String(
+      product?.couponCode ||
+      product?.coupon ||
+      ''
+    ).trim();
+
+  return (
+    product?.couponVerified === true &&
+    coupon
+  )
+    ? coupon
+    : '';
 }
 
 export function fallbackOfferCopy(product) {
@@ -293,11 +377,19 @@ export function fallbackOfferCopy(product) {
   const price =
     verifiedPrice(product);
 
+  const oldPrice =
+    verifiedOriginalPrice(
+      product
+    );
+
   const discount =
     verifiedDiscount(product);
 
   const rating =
     verifiedRating(product);
+
+  const coupon =
+    verifiedCoupon(product);
 
   const lines = [
     title,
@@ -306,19 +398,39 @@ export function fallbackOfferCopy(product) {
     ''
   ];
 
+  if (oldPrice) {
+    lines.push(
+      `De: ~${oldPrice}~`
+    );
+    lines.push('');
+  }
+
   if (price) {
     lines.push(
-      `Por: *${price}*`
+      `Por: *${price}* ✅`
     );
   }
 
-  if (discount > 0) {
+  // Se não houver preço antigo confirmado, ainda podemos mostrar
+  // a porcentagem oficial de desconto, quando ela existir.
+  if (
+    !oldPrice &&
+    discount > 0
+  ) {
     lines.push(
       `Desconto: ${discount}%`
     );
   }
 
+  if (coupon) {
+    lines.push('');
+    lines.push(
+      `🎟️ Use cupom *${coupon}*`
+    );
+  }
+
   if (rating > 0) {
+    lines.push('');
     lines.push(
       `Nota: ${rating
         .toFixed(1)

@@ -1357,6 +1357,8 @@ async function fetchSheinVerified(
 
     let name = '';
     let price = 0;
+    let originalPrice = 0;
+    let rating = 0;
     let imageUrl = null;
 
     const scripts = [
@@ -1452,6 +1454,28 @@ async function fetchSheinVerified(
             0
           );
 
+        const highPrice =
+          Number(
+            offers.highPrice ||
+            0
+          );
+
+        if (
+          highPrice > price
+        ) {
+          originalPrice =
+            highPrice;
+        }
+
+        rating =
+          Number(
+            p.aggregateRating
+              ?.ratingValue ||
+            p.aggregateRating
+              ?.ratingValueText ||
+            0
+          );
+
         const image =
           Array.isArray(
             p.image
@@ -1487,14 +1511,55 @@ async function fetchSheinVerified(
         null;
     }
 
+    const salePrice =
+      firstPositive(
+        html,
+        [
+          /"salePrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
+          /"amountWithSymbol"\s*:\s*"[^0-9]*([0-9]+(?:[.,][0-9]+)?)"/i
+        ]
+      );
+
+    const retailPrice =
+      firstPositive(
+        html,
+        [
+          /"retailPrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
+          /"originalPrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i
+        ]
+      );
+
+    if (
+      salePrice > 0
+    ) {
+      price =
+        salePrice;
+    }
+
+    if (
+      retailPrice > price
+    ) {
+      originalPrice =
+        retailPrice;
+    }
+
     if (!price) {
       price =
         firstPositive(
           html,
           [
-            /"salePrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
-            /"retailPrice"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
             /"price"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i
+          ]
+        );
+    }
+
+    if (!rating) {
+      rating =
+        firstPositive(
+          html,
+          [
+            /"ratingValue"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i,
+            /"comment_rank_average"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?/i
           ]
         );
     }
@@ -1531,12 +1596,30 @@ async function fetchSheinVerified(
       name,
       price,
       originalPrice:
-        0,
+        originalPrice >
+          price
+          ? originalPrice
+          : 0,
       discountPct:
-        0,
+        originalPrice >
+          price &&
+        price > 0
+          ? (
+              (
+                originalPrice -
+                price
+              ) /
+              originalPrice
+            ) *
+            100
+          : 0,
       sales,
       rating:
-        0,
+        Number.isFinite(
+          rating
+        )
+          ? rating
+          : 0,
       imageUrl,
       canonicalUrl:
         res.url || url,
