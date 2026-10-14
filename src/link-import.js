@@ -93,6 +93,265 @@ export async function refreshTikTokShopProduct(inputUrl) {
   return product;
 }
 
+
+function decodeMeliHtml(value) {
+  return String(value || '')
+    .replace(/\\u002F/gi, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function normalizeMeliDirectUrl(value, baseUrl = '') {
+  let s = decodeMeliHtml(value)
+    .trim()
+    .replace(/^["']|["']$/g, '');
+
+  if (!s) return '';
+
+  try {
+    s = new URL(s, baseUrl || undefined).toString();
+  } catch {}
+
+  return s.split('#')[0];
+}
+
+function meliProductUrlFromHtml(html, baseUrl = '') {
+  const normalized = decodeMeliHtml(html);
+
+  if (!normalized) {
+    return '';
+  }
+
+  // Links meli.la frequentemente caem em /social/.
+  // O produto promovido fica em um bloco "single".
+  // Esta busca é deliberadamente restrita ao bloco para não pegar
+  // produtos de "quem viu também comprou".
+  const marker =
+    'ui-recommendations-list__items-wrapper--single';
+
+  const markerIndex =
+    normalized.indexOf(marker);
+
+  const regions = [];
+
+  if (markerIndex >= 0) {
+    regions.push(
+      normalized.slice(
+        Math.max(0, markerIndex - 5000),
+        Math.min(
+          normalized.length,
+          markerIndex + 50000
+        )
+      )
+    );
+  }
+
+  // Algumas versões do HTML trazem o bloco inteiro sem a mesma
+  // formatação de atributos; tentamos capturar um UL próximo.
+  const looseSection =
+    normalized.match(
+      /<ul[^>]*ui-recommendations-list__items-wrapper--single[^>]*>[\s\S]*?<\/ul>/i
+    );
+
+  if (looseSection?.[0]) {
+    regions.unshift(
+      looseSection[0]
+    );
+  }
+
+  // Dentro do bloco do produto promovido, aceitamos:
+  // - anúncio vendedor MLB...
+  // - PDP /p/MLB...
+  // - URLs embutidas em href/JSON.
+  for (const region of regions) {
+    const absolute =
+      region.match(
+        /https?:\/\/(?:produto|www)\.mercadolivre\.com\.br\/[^"'<> \n\r\t]*(?:\/p\/MLB[-_]?\d+|MLB[-_]?\d+)[^"'<> \n\r\t]*/i
+      );
+
+    if (absolute?.[0]) {
+      return normalizeMeliDirectUrl(
+        absolute[0],
+        baseUrl
+      );
+    }
+
+    const href =
+      region.match(
+        /href=["']([^"']*(?:\/p\/MLB[-_]?\d+|MLB[-_]?\d+)[^"']*)["']/i
+      );
+
+    if (href?.[1]) {
+      return normalizeMeliDirectUrl(
+        href[1],
+        baseUrl
+      );
+    }
+
+    // Às vezes o HTML inclui apenas o item_id.
+    const itemId =
+      region.match(
+        /["']?(?:item_id|itemId|id)["']?\s*[:=]\s*["']?(MLB[-_]?\d{6,})["']?/i
+      );
+
+    if (itemId?.[1]) {
+      const digits =
+        String(itemId[1])
+          .replace(/\D/g, '');
+
+      if (digits) {
+        return `https://produto.mercadolivre.com.br/MLB-${digits}`;
+      }
+    }
+  }
+
+  // Se o redirecionamento já virou uma página de produto, usa ela.
+  const canonical =
+    normalized.match(
+      /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i
+    ) ||
+    normalized.match(
+      /<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i
+    );
+
+  if (
+    canonical?.[1] &&
+    /mercadolivre\.com\.br\/.*(?:\/p\/MLB|MLB[-_]?\d+)/i.test(
+      canonical[1]
+    )
+  ) {
+    return normalizeMeliDirectUrl(
+      canonical[1],
+      baseUrl
+    );
+  }
+
+  const ogUrl =
+    normalized.match(
+      /<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i
+    ) ||
+    normalized.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:url["']/i
+    );
+
+  if (
+    ogUrl?.[1] &&
+    /mercadolivre\.com\.br\/.*(?:\/p\/MLB|MLB[-_]?\d+)/i.test(
+      ogUrl[1]
+    )
+  ) {
+    return normalizeMeliDirectUrl(
+      ogUrl[1],
+      baseUrl
+    );
+  }
+
+  return '';
+}
+
+async function fetchMeliLandingWithAgent(
+  inputUrl,
+  userAgent
+) {
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () => controller.abort(),
+      22000
+    );
+
+  try {
+    const res =
+      await fetch(
+        inputUrl,
+        {
+          redirect: 'follow',
+          signal:
+            controller.signal,
+          headers: {
+            'User-Agent':
+              userAgent,
+            Accept:
+              'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language':
+              'pt-BR,pt;q=0.9,en;q=0.6',
+            'Cache-Control':
+              'no-cache'
+          }
+        }
+      );
+
+    const html =
+      await res.text()
+        .catch(
+          () => ''
+        );
+
+    return {
+      finalUrl:
+        res.url ||
+        inputUrl,
+      html
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveMeliAffiliateProductUrl(
+  inputUrl
+) {
+  const agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36'
+  ];
+
+  let lastFinal =
+    inputUrl;
+
+  for (const agent of agents) {
+    try {
+      const landing =
+        await fetchMeliLandingWithAgent(
+          inputUrl,
+          agent
+        );
+
+      lastFinal =
+        landing.finalUrl ||
+        lastFinal;
+
+      // Se o próprio redirect já chegou no anúncio/PDP, perfeito.
+      if (
+        /mercadolivre\.com\.br\/.*(?:\/p\/MLB[-_]?\d+|MLB[-_]?\d+)/i.test(
+          lastFinal
+        )
+      ) {
+        return lastFinal;
+      }
+
+      const fromHtml =
+        meliProductUrlFromHtml(
+          landing.html,
+          landing.finalUrl ||
+          inputUrl
+        );
+
+      if (fromHtml) {
+        return fromHtml;
+      }
+    } catch {}
+  }
+
+  // Retorna vazio em vez de chutar um produto aleatório.
+  return '';
+}
+
+
 export async function importAffiliateProductLink(inputUrl) {
   const exact = String(inputUrl || '').trim();
   if (!/^https?:\/\//i.test(exact)) throw new Error('Cole um link completo começando com http:// ou https://.');
@@ -106,7 +365,33 @@ export async function importAffiliateProductLink(inputUrl) {
     try { product = await importShopeeAffiliateLink(exact); }
     catch { product = await importProductFromUrl(exact); }
   } else if (platform === 'mercadolivre') {
-    product = await importProductFromUrl(exact);
+    // Primeiro resolve o link curto meli.la até o produto promovido real.
+    // Isso evita usar a própria página /social/ ou um item recomendado.
+    const resolvedProductUrl =
+      await resolveMeliAffiliateProductUrl(
+        exact
+      );
+
+    if (!resolvedProductUrl) {
+      throw new Error(
+        'O Mercado Livre abriu o link de afiliada, mas não expôs o produto promovido no HTML dessa requisição. Tente novamente em alguns segundos; a Auri não vai escolher um produto aleatório.'
+      );
+    }
+
+    product =
+      await importProductFromUrl(
+        resolvedProductUrl
+      );
+
+    // Mantém exatamente o link de afiliada colado pela usuária.
+    if (product) {
+      product.canonicalUrl =
+        product.canonicalUrl ||
+        resolvedProductUrl;
+
+      product.resolvedAffiliateProductUrl =
+        resolvedProductUrl;
+    }
   } else if (platform === 'shein') {
     const landing = await fetchLanding(exact);
     try { product = await refreshSheinProduct(landing.finalUrl || exact); }
