@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#fff9f5">
+  <title>Auri • Central de Afiliados</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login-shell">
+    <div class="login-card">
+      <img class="login-avatar" src="/auri-avatar.png" alt="Auri">
+      <span class="eyebrow">Universo da Esther</span>
+      <h1>Auri</h1>
+      <p class="login-tagline">Sua bestie virtual com um carrinho bem real 🛍️</p>
+      <label class="field compact">Senha do painel
+        <input id="password" type="password" placeholder="Digite sua senha" autocomplete="current-password">
+      </label>
+      <button id="loginBtn" class="primary wide">Entrar no painel</button>
+      <small id="loginMsg" class="login-msg"></small>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="/auri-avatar.png" alt="Auri">
+        <div>
+          <strong>Auri</strong>
+          <span>Universo da Esther</span>
+        </div>
+      </div>
+
+      <div class="side-kicker">OPERAÇÃO</div>
+      <nav id="nav" class="nav-main">
+        <button data-view="home" class="active"><span>⌂</span> Visão geral</button>
+        <button data-view="approval"><span>✦</span> Aprovação <b id="navApproval">0</b></button>
+        <button data-view="queue"><span>▣</span> Fila <b id="navQueue">0</b></button>
+        <button data-view="history"><span>✓</span> Enviados</button>
+      </nav>
+
+      <div class="side-kicker">AUTOMAÇÃO</div>
+      <nav class="nav-main">
+        <button data-view="automation"><span>⚡</span> Automação</button>
+        <button data-view="marketplaces"><span>◉</span> Marketplaces</button>
+        <button data-view="groups"><span>◌</span> Grupos</button>
+        <button data-view="settings"><span>⚙</span> Configurações</button>
+      </nav>
+
+      <div class="side-status-card">
+        <div class="side-status-top">
+          <span id="waDot" class="dot"></span>
+          <strong id="waStatus">WhatsApp</strong>
+        </div>
+        <small id="waDetail">carregando…</small>
+      </div>
+
+      <div class="side-foot">achadinhos que fazem sentido<br>pra você e pro seu bolso ♡</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">CENTRAL DE AFILIADOS</span>
+          <h1 id="pageTitle">Visão geral</h1>
+          <p id="pageSub">Pesquise, aprove, organize e envie sem sair da Auri.</p>
+        </div>
+        <div class="header-actions">
+          <button id="refreshBtn" class="ghost icon-btn">↻ <span>Atualizar</span></button>
+          <button id="sendNowBtn" class="primary">▶ Enviar próxima</button>
+        </div>
+      </header>
+
+      <section id="view-home" class="view active">
+        <section class="hero">
+          <div>
+            <span class="hero-badge">AURI CONTROL</span>
+            <h2>Seu painel de achadinhos, <em>todo em um só lugar.</em></h2>
+            <p>A Auri pesquisa, organiza a aprovação, monta o texto e controla a fila do WhatsApp.</p>
+            <div class="hero-actions">
+              <button data-go="approval" class="primary">Ver aprovações</button>
+              <button data-go="queue" class="soft">Abrir fila</button>
+            </div>
+          </div>
+          <div class="hero-visual">
+            <img src="/auri-avatar.png" alt="Auri">
+            <span class="spark s1">✦</span><span class="spark s2">♡</span><span class="spark s3">🎀</span>
+          </div>
+        </section>
+
+        <div class="status-strip" id="statusStrip">
+          <span id="statusWhats"><i class="status-dot"></i> WhatsApp</span>
+          <span id="statusSearch"><i class="status-dot"></i> Auto busca</span>
+          <span id="statusQueue"><i class="status-dot"></i> Auto fila</span>
+          <span id="statusPause"><i class="status-dot"></i> Envios</span>
+        </div>
+
+        <div class="stats">
+          <article><div class="stat-icon rose">✦</div><div><span>Pendentes</span><strong id="statApproval">0</strong><small>aguardando aprovação</small></div></article>
+          <article><div class="stat-icon wine">▣</div><div><span>Na fila</span><strong id="statQueue">0</strong><small>prontas para envio</small></div></article>
+          <article><div class="stat-icon blush">✓</div><div><span>Enviadas hoje</span><strong id="statSent">0</strong><small id="sentLabel">histórico de hoje</small></div></article>
+          <article><div class="stat-icon dark">⚡</div><div><span>Auto busca</span><strong id="statAuto">OFF</strong><small id="lastDiscovery">—</small></div></article>
+        </div>
+
+        <div class="grid-2 home-main-grid">
+          <section class="panel search-panel">
+            <div class="panel-head">
+              <div><span class="section-kicker">GARIMPO RÁPIDO</span><h2>Buscar ofertas</h2><p>Pesquise nos três marketplaces ao mesmo tempo.</p></div>
+              <span class="bow">🎀</span>
+            </div>
+            <div class="search-box">
+              <input id="searchKeyword" placeholder="Ex.: organizadores, perfume, cafeteira…">
+              <button id="searchBtn" class="primary">Pesquisar</button>
+            </div>
+            <div class="checks market-checks">
+              <label><input type="checkbox" class="searchPlatform" value="shopee" checked><span>🧡 Shopee</span></label>
+              <label><input type="checkbox" class="searchPlatform" value="mercadolivre" checked><span>💛 Mercado Livre</span></label>
+              <label><input type="checkbox" class="searchPlatform" value="shein" checked><span>🖤 SHEIN</span></label>
+            </div>
+            <div id="searchMsg" class="hint"></div>
+          </section>
+
+          <section class="panel automation-card">
+            <div class="panel-head"><div><span class="section-kicker">MODO AUTOMÁTICO</span><h2>Automação rápida</h2><p>Controle os principais robôs da Auri.</p></div></div>
+            <div class="toggle-row"><div><strong>Auto busca</strong><small>Tendências + estação + variedade</small></div><label class="switch"><input id="autoDiscovery" type="checkbox"><span></span></label></div>
+            <div class="toggle-row"><div><strong>Auto fila segura</strong><small>Só entra oferta considerada segura</small></div><label class="switch"><input id="autoQueue" type="checkbox"><span></span></label></div>
+            <div class="toggle-row"><div><strong>Pausar envios</strong><small>Interrompe o disparador do WhatsApp</small></div><label class="switch"><input id="paused" type="checkbox"><span></span></label></div>
+            <button id="autoSearchNow" class="secondary wide">🔎 Rodar Auto busca agora</button>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head"><div><span class="section-kicker">MARKETPLACES</span><h2>Fontes da Auri</h2><p>Ative ou pause cada fonte sem mexer no código.</p></div></div>
+          <div id="marketCards" class="market-cards"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div><span class="section-kicker">MIX DA FILA</span><h2>Categorias que estão entrando</h2><p>Uma leitura rápida para evitar que o grupo fique repetitivo.</p></div>
+          </div>
+          <div id="categorySummary" class="category-summary"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div><span class="section-kicker">PRÓXIMOS DISPAROS</span><h2>Topo da fila</h2><p>Esta é a ordem real de envio.</p></div>
+            <button data-go="queue" class="ghost">Ver fila completa</button>
+          </div>
+          <div id="homeQueue" class="cards-list"></div>
+        </section>
+      </section>
+
+      <section id="view-approval" class="view">
+        <div class="panel-head page-toolbar">
+          <div><span class="section-kicker">REVISÃO</span><h2>Caixa de aprovação</h2><p>Revise, edite e mande para a fila.</p></div>
+          <div><button id="clearApproval" class="danger ghost">Apagar tudo</button><button id="autoSearchApproval" class="secondary">Buscar novos</button></div>
+        </div>
+        <div id="approvalFilters" class="filter-chips"></div>
+        <div id="approvalList" class="offer-grid"></div>
+      </section>
+
+      <section id="view-queue" class="view">
+        <div class="panel-head page-toolbar">
+          <div><span class="section-kicker">DISPARADOR</span><h2>Fila de envio</h2><p>Edite, priorize e confira antes de mandar.</p></div>
+          <button id="clearQueue" class="danger ghost">Esvaziar fila</button>
+        </div>
+        <div id="queueFilters" class="filter-chips"></div>
+        <div id="queueList" class="offer-grid"></div>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="panel-head page-toolbar"><div><span class="section-kicker">HISTÓRICO</span><h2>Enviados</h2><p>Ofertas que já passaram pelo disparador.</p></div></div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section id="view-automation" class="view">
+        <div class="grid-2">
+          <section class="panel">
+            <div class="panel-head"><div><span class="section-kicker">AGENDA</span><h2>Horários de envio</h2><p>As mudanças valem sem reiniciar o bot.</p></div></div>
+            <label class="field">Início<input id="sendStart" type="time"></label>
+            <label class="field">Fim<input id="sendEnd" type="time"></label>
+            <label class="field">Intervalo entre ofertas<select id="sendInterval"><option value="5">5 minutos</option><option value="10">10 minutos</option><option value="15">15 minutos</option><option value="20">20 minutos</option><option value="30">30 minutos</option><option value="60">60 minutos</option></select></label>
+            <label class="field">Intervalo da Auto busca<select id="discoveryInterval"><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="180">3 horas</option><option value="360">6 horas</option></select></label>
+            <button id="saveSchedule" class="primary wide">Salvar horários</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><div><span class="section-kicker">CURADORIA</span><h2>Filtros de pesquisa</h2><p>Regras mínimas para uma oferta aparecer.</p></div></div>
+            <label class="field">Mínimo de vendas<select id="minSales"><option>50</option><option>100</option><option>500</option><option>1000</option></select></label>
+            <label class="field">Quantidade por busca<select id="resultLimit"><option>5</option><option>10</option><option>15</option><option>20</option></select></label>
+            <label class="field">Ordenar por<select id="sortBy"><option value="sales">Mais vendidos</option><option value="discount">Maior desconto</option><option value="rating">Melhor nota</option><option value="balanced">Equilibrado</option></select></label>
+            <div class="toggle-row"><div><strong>Busca ampla</strong><small>Tenta variações do termo pesquisado</small></div><label class="switch"><input id="broadSearch" type="checkbox"><span></span></label></div>
+            <button id="saveFilters" class="primary wide">Salvar filtros</button>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-marketplaces" class="view">
+        <section class="panel">
+          <div class="panel-head"><div><span class="section-kicker">FONTES</span><h2>Marketplaces automáticos</h2><p>Escolha onde a Auri deve garimpar.</p></div></div>
+          <div id="marketSettings" class="market-cards"></div>
+          <div class="notice">🧡 <strong>Shopee:</strong> link afiliado automático integrado. 💛 <strong>Mercado Livre</strong> e 🖤 <strong>SHEIN:</strong> a pesquisa é automática; quando a Auri não tiver um link de comissão confirmado, a oferta fica marcada como <em>link pendente</em> antes de entrar na fila.</div>
+        </section>
+      </section>
+
+      <section id="view-groups" class="view">
+        <section class="panel">
+          <div class="panel-head"><div><span class="section-kicker">DESTINOS</span><h2>Grupos do WhatsApp</h2><p>Escolha onde as ofertas serão enviadas.</p></div><button id="loadGroups" class="secondary">Atualizar grupos</button></div>
+          <div id="groupsList" class="groups-list"></div>
+          <button id="saveGroups" class="primary">Salvar grupos selecionados</button>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><span class="section-kicker">CONEXÃO</span><h2>Conectar WhatsApp</h2><p>Use apenas se o WhatsApp estiver desconectado.</p></div></div>
+          <div class="search-box"><input id="phone" placeholder="5544999999999"><button id="pairBtn" class="secondary">Gerar código</button></div>
+          <div id="pairCode" class="pair-code"></div>
+        </section>
+      </section>
+
+      <section id="view-settings" class="view">
+        <section class="panel">
+          <div class="panel-head"><div><span class="section-kicker">RADAR</span><h2>Tendências do dia</h2><p>A Auto busca combina tendências, época e estação.</p></div><button id="refreshTrends" class="secondary">Atualizar tendências</button></div>
+          <div id="trendTerms" class="chips"></div>
+          <pre id="trendText" class="trend-text"></pre>
+        </section>
+        <section class="panel security-card">
+          <div><span class="section-kicker">PRIVACIDADE</span><h2>Segurança do painel</h2><p>O site exige <code>DASHBOARD_PASSWORD</code> no Railway. Nenhuma chave de API é exibida no navegador.</p></div>
+          <button id="logoutBtn" class="danger ghost">Sair do painel</button>
+        </section>
+      </section>
+    </main>
+
+    <div class="mobile-nav" id="mobileNav">
+      <button data-view="home" class="active">⌂<span>Início</span></button>
+      <button data-view="approval">✦<span>Aprovar</span></button>
+      <button data-view="queue">▣<span>Fila</span></button>
+      <button data-view="automation">⚡<span>Auto</span></button>
+      <button data-view="settings">⚙<span>Mais</span></button>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <button id="closeModal" class="modal-close">×</button>
+      <span class="section-kicker">OFERTA</span>
+      <h2 id="modalTitle">Editar oferta</h2>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
