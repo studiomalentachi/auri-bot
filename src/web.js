@@ -41,6 +41,14 @@ import {
 } from './scheduler.js';
 
 import {
+  importAffiliateProductLink
+} from './link-import.js';
+
+import {
+  sendOfferQueueNow
+} from './divulgador.js';
+
+import {
   buildTrendDigest
 } from './trends.js';
 
@@ -269,6 +277,14 @@ function sanitizedState() {
     dashboardSettings:
       s.dashboardSettings ||
       {},
+    offerQueues:
+      s.offerQueues ||
+      [],
+    divulgador:
+      s.divulgador ||
+      {},
+    divulgadorLog:
+      (s.divulgadorLog || []).slice(0, 120),
     targetGroups:
       s.targetGroups ||
       [],
@@ -649,6 +665,24 @@ function isBlockedProduct(
   );
 }
 
+function normalizedWords(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(x => x.length >= 3);
+}
+
+function relevanceScore(product, keyword) {
+  const wanted = normalizedWords(keyword);
+  if (!wanted.length) return 1;
+  const hay = normalizedWords([product?.name, product?.categoryName].filter(Boolean).join(' '));
+  const hits = wanted.filter(x => hay.some(h => h === x || h.includes(x) || x.includes(h))).length;
+  return hits / wanted.length;
+}
+
 async function manualSearch(
   keyword,
   platforms
@@ -796,32 +830,26 @@ async function manualSearch(
 
   const buckets =
     Object.fromEntries(
-      results.map(
-        (x) => [
-          x.platform,
-          (
-            x.rows || []
-          ).filter(
-            (p) =>
-              !isBlockedProduct(
-                p
-              ) &&
-              Number(
-                p.sales ||
-                0
-              ) >=
-                Number(
-                  filters.minSales ||
-                  50
-                ) &&
-              Number(
-                p.price ||
-                0
-              ) >
-                0
-          )
-        ]
-      )
+      results.map((x) => {
+        let rows = (x.rows || []).filter(
+          (p) =>
+            !isBlockedProduct(p) &&
+            Number(p.sales || 0) >= Number(filters.minSales || 50) &&
+            Number(p.price || 0) > 0
+        );
+
+        if (x.platform === 'mercadolivre') {
+          rows = rows
+            .map((p) => ({ ...p, searchRelevance: relevanceScore(p, keyword) }))
+            .filter((p) => p.searchRelevance >= 0.5)
+            .sort((a,b) =>
+              Number(b.searchRelevance || 0) - Number(a.searchRelevance || 0) ||
+              Number(b.sales || 0) - Number(a.sales || 0)
+            );
+        }
+
+        return [x.platform, rows];
+      })
     );
 
   const order = [
@@ -989,6 +1017,30 @@ async function manualSearch(
           )
       )
   };
+}
+
+async function itemFromImportedLink(inputUrl) {
+  const product = await importAffiliateProductLink(inputUrl);
+  const copy = await generateOfferCopy(
+    product,
+    'Produto reconhecido automaticamente pelo link de afiliada colado no painel.'
+  );
+
+  return {
+    id: suggestedId(),
+    product,
+    link: inputUrl,
+    text: copy.text,
+    aiProvider: copy.provider,
+    aiGenerated: true,
+    autoQueued: false,
+    importedByLink: true,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function newQueueId() {
+  return 'fila-' + crypto.randomBytes(4).toString('hex');
 }
 
 function contentType(
@@ -1457,6 +1509,191 @@ async function api(
           sanitizedState()
       }
     );
+  }
+
+
+  if (req.method === 'POST' && url.pathname === '/api/link/import') {
+    const body = await readJson(req);
+    const inputUrl = String(body.url || '').trim();
+
+    if (!inputUrl) {
+      return json(res, 400, { ok: false, error: 'Cole o link do produto.' });
+    }
+
+    const item = await itemFromImportedLink(inputUrl);
+
+    return json(res, 200, {
+      ok: true,
+      item,
+      preview: formatOfferMessage(item)
+    });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/link/to-approval') {
+    const body = await readJson(req);
+    const item = body.item;
+
+    if (!item?.product || !item?.link) {
+      return json(res, 400, { ok: false, error: 'Oferta inválida.' });
+    }
+
+    updateStore((s) => {
+      s.suggestions.unshift({
+        ...item,
+        id: item.id || suggestedId(),
+        createdAt: item.createdAt || new Date().toISOString()
+      });
+      s.suggestions = s.suggestions.slice(0, 250);
+      return s;
+    });
+
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/offer-queues') {
+    const body = await readJson(req);
+    const name = String(body.name || '').trim();
+
+    if (!name) {
+      return json(res, 400, { ok: false, error: 'Dê um nome para a fila.' });
+    }
+
+    const q = {
+      id: newQueueId(),
+      name: name.slice(0,80),
+      active: Boolean(body.active),
+      intervalMinutes: Math.max(5, Number(body.intervalMinutes || 10)),
+      startMinutes: Number(body.startMinutes ?? 480),
+      endMinutes: Number(body.endMinutes ?? 1320),
+      groups: Array.isArray(body.groups) ? body.groups : [],
+      items: [],
+      sentCount: 0,
+      errorCount: 0,
+      blockedCount: 0,
+      lastSentAt: null,
+      lastAttemptAt: null,
+      createdAt: new Date().toISOString()
+    };
+
+    updateStore((s) => {
+      s.offerQueues.push(q);
+      return s;
+    });
+
+    return json(res, 200, { ok: true, queue: q, state: sanitizedState() });
+  }
+
+  const oqMatch = url.pathname.match(/^\/api\/offer-queues\/([^/]+)$/);
+
+  if (oqMatch && req.method === 'PATCH') {
+    const id = decodeURIComponent(oqMatch[1]);
+    const body = await readJson(req);
+
+    updateStore((s) => {
+      const q = s.offerQueues.find(x => String(x.id) === String(id));
+      if (!q) return s;
+
+      if ('name' in body) q.name = String(body.name || q.name).trim().slice(0,80);
+      if ('active' in body) q.active = Boolean(body.active);
+      if ('intervalMinutes' in body) q.intervalMinutes = Math.max(5, Number(body.intervalMinutes || 10));
+      if ('startMinutes' in body) q.startMinutes = Number(body.startMinutes);
+      if ('endMinutes' in body) q.endMinutes = Number(body.endMinutes);
+      if (Array.isArray(body.groups)) q.groups = body.groups;
+
+      return s;
+    });
+
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  if (oqMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(oqMatch[1]);
+    updateStore((s) => {
+      s.offerQueues = s.offerQueues.filter(x => String(x.id) !== String(id));
+      return s;
+    });
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  const oqItems = url.pathname.match(/^\/api\/offer-queues\/([^/]+)\/items$/);
+
+  if (oqItems && req.method === 'POST') {
+    const id = decodeURIComponent(oqItems[1]);
+    const body = await readJson(req);
+    const item = body.item;
+
+    if (!item?.product || !item?.link) {
+      return json(res, 400, { ok: false, error: 'Oferta inválida.' });
+    }
+
+    let found = false;
+    updateStore((s) => {
+      const q = s.offerQueues.find(x => String(x.id) === String(id));
+      if (!q) return s;
+      found = true;
+      q.items.push({ ...item, id: item.id || suggestedId(), queuedAt: new Date().toISOString() });
+      return s;
+    });
+
+    if (!found) return json(res, 404, { ok: false, error: 'Fila não encontrada.' });
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  const apToQ = url.pathname.match(/^\/api\/suggestions\/(\d+)\/offer-queue\/([^/]+)$/);
+
+  if (apToQ && req.method === 'POST') {
+    const index = Number(apToQ[1]);
+    const qid = decodeURIComponent(apToQ[2]);
+    let error = '';
+
+    updateStore((s) => {
+      const item = s.suggestions?.[index];
+      const q = s.offerQueues.find(x => String(x.id) === String(qid));
+
+      if (!item) { error = 'Sugestão não encontrada.'; return s; }
+      if (!q) { error = 'Fila não encontrada.'; return s; }
+      if (!hasSafeAffiliateLink(item)) { error = 'Essa oferta ainda não tem um link de afiliada confirmado.'; return s; }
+
+      const [removed] = s.suggestions.splice(index, 1);
+      q.items.push({ ...removed, queuedAt: new Date().toISOString() });
+      return s;
+    });
+
+    if (error) return json(res, 409, { ok: false, error });
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  const oqSingle = url.pathname.match(/^\/api\/offer-queues\/([^/]+)\/items\/(\d+)$/);
+
+  if (oqSingle && req.method === 'DELETE') {
+    const id = decodeURIComponent(oqSingle[1]);
+    const index = Number(oqSingle[2]);
+
+    updateStore((s) => {
+      const q = s.offerQueues.find(x => String(x.id) === String(id));
+      if (q?.items?.[index]) q.items.splice(index,1);
+      return s;
+    });
+
+    return json(res, 200, { ok: true, state: sanitizedState() });
+  }
+
+  const oqSend = url.pathname.match(/^\/api\/offer-queues\/([^/]+)\/send-next$/);
+
+  if (oqSend && req.method === 'POST') {
+    const result = await sendOfferQueueNow(decodeURIComponent(oqSend[1]));
+    return json(res, 200, { ok: true, result, state: sanitizedState() });
+  }
+
+  if (req.method === 'PATCH' && url.pathname === '/api/divulgador') {
+    const body = await readJson(req);
+
+    updateStore((s) => {
+      if ('enabled' in body) s.divulgador.enabled = Boolean(body.enabled);
+      return s;
+    });
+
+    return json(res, 200, { ok: true, state: sanitizedState() });
   }
 
   const previewMatch =

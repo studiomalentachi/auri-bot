@@ -45,6 +45,17 @@ const defaults = {
     sendIntervalMinutes: 10,
     discoveryEveryMinutes: 120
   },
+  offerQueues: [],
+  divulgador: {
+    enabled: false,
+    sentOffers: 0,
+    sentMessages: 0,
+    errors: 0,
+    blocked: 0,
+    lastRunAt: null,
+    lastSuccessAt: null
+  },
+  divulgadorLog: [],
   lastDiscoveryAt: null,
   metrics: {
     sentOffers: 0,
@@ -271,6 +282,40 @@ function migrate(s) {
         )
       )
     );
+
+  if (!Array.isArray(out.offerQueues)) {
+    out.offerQueues = [];
+  }
+
+  out.offerQueues = out.offerQueues
+    .filter((q) => q && q.id && q.name)
+    .map((q) => ({
+      id: String(q.id),
+      name: String(q.name).slice(0, 80),
+      active: Boolean(q.active),
+      intervalMinutes: Math.max(5, Math.min(720, Number(q.intervalMinutes || 10))),
+      startMinutes: Math.max(0, Math.min(1439, Number(q.startMinutes ?? 480))),
+      endMinutes: Math.max(0, Math.min(1439, Number(q.endMinutes ?? 1320))),
+      groups: Array.isArray(q.groups) ? q.groups : [],
+      items: Array.isArray(q.items) ? q.items : [],
+      sentCount: Number(q.sentCount || 0),
+      errorCount: Number(q.errorCount || 0),
+      blockedCount: Number(q.blockedCount || 0),
+      lastSentAt: q.lastSentAt || null,
+      lastAttemptAt: q.lastAttemptAt || null,
+      createdAt: q.createdAt || null
+    }));
+
+  out.divulgador = {
+    ...defaults.divulgador,
+    ...(s?.divulgador || {})
+  };
+
+  if (!Array.isArray(out.divulgadorLog)) {
+    out.divulgadorLog = [];
+  }
+
+  out.divulgadorLog = out.divulgadorLog.slice(0, 400);
 
   if (
     ![

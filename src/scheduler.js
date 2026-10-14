@@ -18,6 +18,7 @@ import {
 } from './store.js';
 import { sendOfferToGroups } from './whatsapp.js';
 import { buildTrendDigest } from './trends.js';
+import { refreshTikTokShopProduct } from './link-import.js';
 
 let busy = false;
 let lastSlot = '';
@@ -539,6 +540,27 @@ async function refreshBeforeSend(
           'SHEIN não confirmou o preço atual.'
         );
       }
+    } else if (
+      platform ===
+        'tiktokshop'
+    ) {
+      fresh =
+        await refreshTikTokShopProduct(
+          item.product?.affiliateLink ||
+          item.link ||
+          item.product?.canonicalUrl
+        );
+
+      if (
+        !fresh ||
+        Number(
+          fresh.price || 0
+        ) <= 0
+      ) {
+        throw new Error(
+          'TikTok Shop não confirmou o preço atual.'
+        );
+      }
     } else {
       // Ofertas manuais continuam como estão.
       return {
@@ -618,6 +640,39 @@ async function refreshBeforeSend(
       error:
         e.message
     };
+  }
+}
+
+export async function sendPreparedItemNow(sourceItem, groups) {
+  if (busy) throw new Error('Já existe um envio em andamento.');
+  if (!Array.isArray(groups) || !groups.length) throw new Error('Essa fila não possui grupos do WhatsApp.');
+
+  busy = true;
+  try {
+    const refreshed = await refreshBeforeSend({ ...sourceItem });
+
+    if (refreshed.item?.autoQueued && !refreshed.verified) {
+      return {
+        item: refreshed.item,
+        sentCount: 0,
+        skipped: true,
+        reason: refreshed.error || 'Revalidação falhou.'
+      };
+    }
+
+    const item = refreshed.item;
+    const sentCount = await sendOfferToGroups(groups, item);
+
+    updateStore((x) => {
+      x.metrics.sentMessages += sentCount;
+      return x;
+    });
+
+    markSent(item);
+
+    return { item, sentCount, skipped: false };
+  } finally {
+    busy = false;
   }
 }
 
@@ -847,6 +902,7 @@ async function tick({
 
   if (
     !s.paused &&
+    !s.divulgador?.enabled &&
     eligibleTime() &&
     slot !== lastSlot &&
     s.queue.length
