@@ -78,29 +78,52 @@ function eligibleTime() {
   } =
     nowParts();
 
-  const maxHour =
-    config.include22
-      ? 22
-      : 21;
+  const s =
+    readStore();
+
+  const settings =
+    s.dashboardSettings ||
+    {};
+
+  const start =
+    Number(
+      settings.sendStartMinutes ??
+      480
+    );
+
+  const end =
+    Number(
+      settings.sendEndMinutes ??
+      1320
+    );
+
+  const interval =
+    Math.max(
+      5,
+      Number(
+        settings.sendIntervalMinutes ||
+        config.sendIntervalMinutes ||
+        10
+      )
+    );
+
+  const current =
+    hour * 60 +
+    minute;
 
   if (
-    hour < 8 ||
-    hour > maxHour
-  ) {
-    return false;
-  }
-
-  if (
-    hour === 22 &&
-    minute > 0 &&
-    config.include22
+    current < start ||
+    current > end
   ) {
     return false;
   }
 
   return (
-    minute %
-    config.sendIntervalMinutes ===
+    (
+      current -
+      start
+    ) %
+    interval ===
     0
   );
 }
@@ -109,21 +132,53 @@ function discoverySlot() {
   const p =
     nowParts();
 
-  if (
-    p.hour < 8 ||
-    p.hour > 22
-  ) {
-    return null;
-  }
+  const s =
+    readStore();
+
+  const settings =
+    s.dashboardSettings ||
+    {};
+
+  const start =
+    Number(
+      settings.sendStartMinutes ??
+      480
+    );
+
+  const end =
+    Number(
+      settings.sendEndMinutes ??
+      1320
+    );
+
+  const every =
+    Math.max(
+      30,
+      Number(
+        settings.discoveryEveryMinutes ||
+        config.discoveryEveryMinutes ||
+        120
+      )
+    );
 
   const minutes =
     p.hour * 60 +
     p.minute;
 
+  if (
+    minutes < start ||
+    minutes > end
+  ) {
+    return null;
+  }
+
   const index =
     Math.floor(
-      minutes /
-      config.discoveryEveryMinutes
+      (
+        minutes -
+        start
+      ) /
+      every
     );
 
   return `${p.date}-${index}`;

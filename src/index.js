@@ -1,6 +1,7 @@
 import { startTelegram } from './telegram.js';
 import { startWhatsApp } from './whatsapp.js';
 import { startScheduler } from './scheduler.js';
+import { startDashboard } from './web.js';
 
 const token =
   process.env
@@ -42,3 +43,6 @@ startWhatsApp()
         e.message
       )
   );
+
+
+startDashboard();

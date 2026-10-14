@@ -39,6 +39,12 @@ const defaults = {
     broadSearch: true,
     sortBy: 'sales'
   },
+  dashboardSettings: {
+    sendStartMinutes: 480,
+    sendEndMinutes: 1320,
+    sendIntervalMinutes: 10,
+    discoveryEveryMinutes: 120
+  },
   lastDiscoveryAt: null,
   metrics: {
     sentOffers: 0,
@@ -212,6 +218,59 @@ function migrate(s) {
 
   out.searchFilters.broadSearch =
     out.searchFilters.broadSearch !== false;
+
+  out.dashboardSettings = {
+    ...defaults.dashboardSettings,
+    ...(s?.dashboardSettings || {})
+  };
+
+  out.dashboardSettings.sendStartMinutes =
+    Math.max(
+      0,
+      Math.min(
+        1439,
+        Number(
+          out.dashboardSettings.sendStartMinutes ??
+          480
+        )
+      )
+    );
+
+  out.dashboardSettings.sendEndMinutes =
+    Math.max(
+      out.dashboardSettings.sendStartMinutes,
+      Math.min(
+        1439,
+        Number(
+          out.dashboardSettings.sendEndMinutes ??
+          1320
+        )
+      )
+    );
+
+  out.dashboardSettings.sendIntervalMinutes =
+    Math.max(
+      5,
+      Math.min(
+        240,
+        Number(
+          out.dashboardSettings.sendIntervalMinutes ||
+          10
+        )
+      )
+    );
+
+  out.dashboardSettings.discoveryEveryMinutes =
+    Math.max(
+      30,
+      Math.min(
+        720,
+        Number(
+          out.dashboardSettings.discoveryEveryMinutes ||
+          120
+        )
+      )
+    );
 
   if (
     ![
