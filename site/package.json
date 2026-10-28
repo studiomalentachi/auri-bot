@@ -1,0 +1,16 @@
+{
+  "name": "auri-site-netlify",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "check": "node --check netlify/functions/api.mjs && node --check netlify/functions/login.mjs && node --check public/app.js"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^9.1.0"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.38.1"
+  }
+}
