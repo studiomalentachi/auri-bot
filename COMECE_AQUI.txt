@@ -1,0 +1,24 @@
+AURI SITE NETLIFY V3
+
+PARA COLOCAR O PAINEL NO NETLIFY:
+Use a pasta "site" como diretório do site.
+
+O painel já permite configurar:
+- nichos;
+- grupos sincronizados pelo WhatsApp;
+- campanhas com data/hora de início e fim;
+- intervalo mínimo e máximo (ex.: 10 a 15 minutos);
+- filas separadas;
+- produtos programados;
+- marketplace da oferta;
+- cupons/templates;
+- histórico;
+- regra mínima de 50 vendas;
+- bloqueio de maternidade/bebê;
+- envio sem imagem anexada, usando texto + link.
+
+IMPORTANTE:
+O site fica no Netlify, mas o WhatsApp precisa do worker da pasta "worker" rodando em hospedagem contínua. Isso é necessário para envio automático em GRUPOS do WhatsApp.
+
+Não coloque senhas/tokens no GitHub.
+Use variáveis de ambiente.
